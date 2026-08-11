@@ -1,0 +1,1 @@
+{"action_schema": "continuous_yaw_20hz_v3", "control_hz": 20, "damage0": 18.3999996, "damage1": 20.0, "deaths0": 1, "deaths1": 0, "decisions": 306, "deployment_path": "realtime_client", "hits0": 21, "hits1": 21, "measured_decisions_per_second": 16.538594776466546, "ok": true, "receipt": "artifacts/fights/pilot15-continuous-yaw/match.jsonl", "wall_seconds": 18.502176523208618}

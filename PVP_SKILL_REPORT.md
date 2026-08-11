@@ -1,6 +1,6 @@
 # Netherite boxing skill proof
 
-## Conclusion
+## V1 conclusion
 
 Pilot 13 proves that the orbiting failure was primarily a control-resolution plus
 state-coverage problem, not a need for a larger network. The same two-layer,
@@ -21,7 +21,7 @@ error and completes real Minecraft fights in 106 decisions.
 5. Trained two independent policies for 100 pure self-play chunks after the warm
    start and gated the frozen checkpoint against pilot 10.
 
-Continuous yaw was intentionally not added: pilot 13 uses the maximum +/-20-degree
+Continuous yaw was intentionally not added to V1: pilot 13 uses the maximum +/-20-degree
 action only 2.17% of sampled decisions, stays within 15 degrees 99.80% of the time,
 and therefore is not quantization-limited.
 
@@ -51,7 +51,33 @@ vanilla knockout after 106 decisions. The recorded fight had 21 versus 19 accept
 hits and 20.0 versus 19.0 damage. Video and receipts are under
 `artifacts/real_pvp_pilot13/`.
 
-The checkpoint contract is 20 Hz in the CUDA simulator. The current rigorous Java
-oracle serializes state, client steps, and role-ordered attack receipts and thus
-runs at 5.47 policy decisions per wall-clock second. A batched server-tick injector
-is the remaining route to true real-time 20 Hz without weakening trace authority.
+The checkpoint contract is 20 Hz in the CUDA simulator. A later realtime client
+path reduced bridge traffic to one concurrent action per client tick and measured
+19.71 decisions/second while recording both V1 perspectives. The serialized Java
+oracle remains available separately when lossless authoritative ordering matters.
+
+## V1.1 continuous-yaw experiment
+
+Pilot 15 replaces the factorized nine-value yaw grid with a tanh-squashed Gaussian
+bounded to +/-20 degrees/tick. PPO samples it during training, while deployment
+uses its mean and continues to sample the categorical tactical heads.
+
+During the first continuous run, a rollout invariant exposed a reused native
+observation buffer: PPO had paired each action with the state after that action,
+creating a fake KL near 3.0. Cloning the decision observation before `env.step`
+reduced replay error below 2e-5 and allowed all 16 PPO updates per role/chunk.
+Pilot 15 then completed 52.43 million corrected adversarial decisions.
+
+| Metric | V1 sampled | V1.1 deployment-equivalent hybrid | Change |
+|---|---:|---:|---:|
+| Mean absolute yaw variation | 4.195 deg/tick | 0.390 deg/tick | -90.7% |
+| Mean absolute yaw delta | 2.244 deg | 0.554 deg | -75.3% |
+| Mean bearing error | 2.340 deg | 2.721 deg | +0.381 deg |
+| Ticks to first hit | 16.09 | 12.11 | -24.8% |
+| Ticks to knockout | 491.20 | 493.09 | effectively unchanged |
+| Role 0 / role 1 / draws | 107 / 112 / 37 | 101 / 112 / 43 | balanced |
+
+In real Minecraft, the two traces used 286 and 289 distinct millidegree-rounded
+yaw values instead of nine. Mean yaw variation fell from V1's 10.82/9.32 to
+1.20/2.28 degrees/tick, and a 306-decision match ended in a vanilla knockout.
+Receipts and video links are under `artifacts/fights/pilot15-continuous-yaw/`.
