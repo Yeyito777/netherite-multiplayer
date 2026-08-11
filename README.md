@@ -6,8 +6,8 @@ the trained policies into real Forge clients.
 
 This project builds on [Infatoshi/netherite](https://github.com/Infatoshi/netherite).
 Our main branch adds a fixed two-player PvP environment, CPU/CUDA parity tests,
-20 Hz fine-control policies, training and evaluation tooling, and a private
-real-Minecraft deployment bridge.
+20 Hz fine-control policies, training and evaluation tooling, and a
+real-Minecraft deployment bridge for private test servers.
 
 ## Boxing MVP
 
