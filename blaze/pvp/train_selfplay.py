@@ -15,13 +15,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical
+from torch.distributions import Categorical, Normal
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from pvp import N_ACT, N_OBS, VecPvp
 
 HEADS = (3, 3, 3, 3, 2, 2, 2)
+CONTINUOUS_HEADS = (3, 3, 2, 2, 2)
+CONTINUOUS_DISCRETE_COLS = (0, 1, 4, 5, 6)
 FWD = (-1.0, 0.0, 1.0)
 STRAFE = (-1.0, 0.0, 1.0)
 YAW = (-15.0, 0.0, 15.0)
@@ -29,32 +31,81 @@ PITCH = (-10.0, 0.0, 10.0)
 YAW_FINE = (-5.0, 0.0, 5.0)
 LEGACY_ACTION_SCHEMA = "legacy_5hz_v1"
 FINE_ACTION_SCHEMA = "fine_yaw_20hz_v2"
+CONTINUOUS_ACTION_SCHEMA = "continuous_yaw_20hz_v3"
+YAW_LIMIT = 20.0
 
 
 def checkpoint_action_schema(config):
     """Missing schema means the frozen pilot-10-era 5 Hz contract."""
     schema = config.get("action_schema", LEGACY_ACTION_SCHEMA)
-    if schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA):
+    if schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
+                      CONTINUOUS_ACTION_SCHEMA):
         raise ValueError(f"unsupported action schema {schema}")
     return schema
 
 
 class Policy(nn.Module):
-    def __init__(self, hidden=128):
+    def __init__(self, hidden=128, action_schema=LEGACY_ACTION_SCHEMA):
         super().__init__()
+        self.action_schema = action_schema
         self.body = nn.Sequential(
             nn.Linear(N_OBS, hidden), nn.Tanh(),
             nn.Linear(hidden, hidden), nn.Tanh())
-        self.actor = nn.Linear(hidden, sum(HEADS))
+        heads = (CONTINUOUS_HEADS if action_schema == CONTINUOUS_ACTION_SCHEMA
+                 else HEADS)
+        self.actor = nn.Linear(hidden, sum(heads))
+        if action_schema == CONTINUOUS_ACTION_SCHEMA:
+            self.yaw_mean = nn.Linear(hidden, 1)
+            # About 2.7 degrees near zero at initialization. PPO may adapt it,
+            # but deployment can use the mean while sampling tactical heads.
+            self.yaw_log_std = nn.Parameter(torch.tensor([-2.0]))
         self.critic = nn.Linear(hidden, 1)
 
     def forward(self, obs):
         h = self.body(obs)
         raw = self.actor(h)
-        return torch.split(raw, HEADS, dim=-1), self.critic(h).squeeze(-1)
+        if self.action_schema == CONTINUOUS_ACTION_SCHEMA:
+            actor = {"categorical": torch.split(raw, CONTINUOUS_HEADS, dim=-1),
+                     "yaw_mean": self.yaw_mean(h).squeeze(-1),
+                     "yaw_log_std": self.yaw_log_std.expand(h.shape[0])}
+        else:
+            actor = torch.split(raw, HEADS, dim=-1)
+        return actor, self.critic(h).squeeze(-1)
 
 
-def sample_actions(logits):
+def _yaw_distribution(actor):
+    return Normal(actor["yaw_mean"], actor["yaw_log_std"].clamp(-4.0, 0.0).exp())
+
+
+def _yaw_log_prob(actor, yaw):
+    scaled = (yaw / YAW_LIMIT).clamp(-1.0 + 1e-6, 1.0 - 1e-6)
+    latent = torch.atanh(scaled)
+    return (_yaw_distribution(actor).log_prob(latent)
+            - torch.log(YAW_LIMIT * (1.0 - scaled.square()) + 1e-6))
+
+
+def sample_actions(actor, action_schema=LEGACY_ACTION_SCHEMA,
+                   deterministic_yaw=False):
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        actions = torch.zeros((actor["yaw_mean"].shape[0], N_ACT),
+                              dtype=torch.float32, device=actor["yaw_mean"].device)
+        logps, entropy = [], []
+        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+            dist = Categorical(logits=head)
+            a = dist.sample()
+            actions[:, col] = a
+            logps.append(dist.log_prob(a))
+            entropy.append(dist.entropy())
+        yaw_dist = _yaw_distribution(actor)
+        latent = actor["yaw_mean"] if deterministic_yaw else yaw_dist.rsample()
+        actions[:, 2] = YAW_LIMIT * torch.tanh(latent)
+        logps.append(_yaw_log_prob(actor, actions[:, 2]))
+        # The latent entropy is a stable exploration proxy. The exact squashed
+        # entropy has no simple closed form and is not needed by PPO ratios.
+        entropy.append(yaw_dist.entropy())
+        return (actions, torch.stack(logps, dim=-1).sum(-1),
+                torch.stack(entropy, dim=-1).sum(-1))
+    logits = actor
     actions, logps, entropy = [], [], []
     for head in logits:
         dist = Categorical(logits=head)
@@ -66,7 +117,30 @@ def sample_actions(logits):
             torch.stack(entropy, dim=-1).sum(-1))
 
 
-def evaluate_actions(logits, actions):
+def greedy_actions(actor, action_schema=LEGACY_ACTION_SCHEMA):
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        actions = torch.zeros((actor["yaw_mean"].shape[0], N_ACT),
+                              dtype=torch.float32, device=actor["yaw_mean"].device)
+        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+            actions[:, col] = head.argmax(-1)
+        actions[:, 2] = YAW_LIMIT * torch.tanh(actor["yaw_mean"])
+        return actions
+    return torch.stack([head.argmax(-1) for head in actor], dim=-1)
+
+
+def evaluate_actions(actor, actions, action_schema=LEGACY_ACTION_SCHEMA):
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        logps, entropy = [], []
+        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+            dist = Categorical(logits=head)
+            logps.append(dist.log_prob(actions[:, col].long()))
+            entropy.append(dist.entropy())
+        yaw_dist = _yaw_distribution(actor)
+        logps.append(_yaw_log_prob(actor, actions[:, 2]))
+        entropy.append(yaw_dist.entropy())
+        return (torch.stack(logps, dim=-1).sum(-1),
+                torch.stack(entropy, dim=-1).sum(-1))
+    logits = actor
     logps, entropy = [], []
     for i, head in enumerate(logits):
         dist = Categorical(logits=head)
@@ -77,18 +151,22 @@ def evaluate_actions(logits, actions):
 
 def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
     rows = torch.zeros((*a.shape[:-1], N_ACT), dtype=torch.float64, device=device)
-    rows[..., 0] = torch.tensor(FWD, dtype=torch.float64, device=device)[a[..., 0]]
-    rows[..., 1] = torch.tensor(STRAFE, dtype=torch.float64, device=device)[a[..., 1]]
-    coarse = torch.tensor(YAW, dtype=torch.float64, device=device)[a[..., 2]]
-    if action_schema == FINE_ACTION_SCHEMA:
+    rows[..., 0] = torch.tensor(FWD, dtype=torch.float64, device=device)[a[..., 0].long()]
+    rows[..., 1] = torch.tensor(STRAFE, dtype=torch.float64, device=device)[a[..., 1].long()]
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        rows[..., 2] = a[..., 2].to(torch.float64).clamp(-YAW_LIMIT, YAW_LIMIT)
+        rows[..., 3] = 0.0
+    elif action_schema == FINE_ACTION_SCHEMA:
+        coarse = torch.tensor(YAW, dtype=torch.float64, device=device)[a[..., 2].long()]
         # Reuse the old pitch head as a fine yaw residual. The Cartesian sum is
         # exactly {-20,-15,-10,-5,0,5,10,15,20}; pitch is fixed for flat boxing.
-        fine = torch.tensor(YAW_FINE, dtype=torch.float64, device=device)[a[..., 3]]
+        fine = torch.tensor(YAW_FINE, dtype=torch.float64, device=device)[a[..., 3].long()]
         rows[..., 2] = coarse + fine
         rows[..., 3] = 0.0
     elif action_schema == LEGACY_ACTION_SCHEMA:
+        coarse = torch.tensor(YAW, dtype=torch.float64, device=device)[a[..., 2].long()]
         rows[..., 2] = coarse
-        rows[..., 3] = torch.tensor(PITCH, dtype=torch.float64, device=device)[a[..., 3]]
+        rows[..., 3] = torch.tensor(PITCH, dtype=torch.float64, device=device)[a[..., 3].long()]
     else:
         raise ValueError(f"unsupported action schema {action_schema}")
     rows[..., 4:] = a[..., 4:].to(torch.float64)
@@ -103,15 +181,26 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
     bearing = torch.atan2(lateral.abs(), longitudinal)
     aligned_move = bearing < (30.0 * np.pi / 180.0)
     aligned_attack = bearing < (20.0 * np.pi / 180.0)
-    out = torch.ones((obs.shape[0], len(HEADS)), dtype=torch.long,
-                     device=obs.device)
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        out = torch.zeros((obs.shape[0], N_ACT), dtype=torch.float32,
+                          device=obs.device)
+        out[:, 0] = 1
+        out[:, 1] = 1
+    else:
+        out = torch.ones((obs.shape[0], len(HEADS)), dtype=torch.long,
+                         device=obs.device)
     # Brake before turning. Unconditional forward+sprint while the target was
     # behind taught the exact wide-orbit failure observed in real deployment.
     out[:, 0] = torch.where((dist > 1.7) & aligned_move, 2, 1)
     out[:, 1] = 1
     # Pure lateral error is zero when the target is exactly behind. Always turn
     # clockwise in that tie so crossing an opponent cannot create a blind state.
-    if action_schema == FINE_ACTION_SCHEMA:
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
+        desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
+                              torch.full_like(desired, 20.0), desired)
+        out[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT)
+    elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
                               torch.full_like(desired, 20.0), desired)
@@ -142,7 +231,12 @@ def scripted_baseline(obs, device, attack=True,
     aligned_move = bearing < (30.0 * np.pi / 180.0)
     aligned_attack = bearing < (20.0 * np.pi / 180.0)
     rows[:, 0] = ((dist > 1.7) & aligned_move).to(torch.float64)
-    if action_schema == FINE_ACTION_SCHEMA:
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
+        desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
+                              torch.full_like(desired, 20.0), desired)
+        rows[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT).to(torch.float64)
+    elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
                               torch.full_like(desired, 20.0), desired)
@@ -191,17 +285,22 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
             move_values = torch.tensor(FWD, dtype=torch.float64, device=device)
             random_rows[:, :, 0] = move_values[
                 torch.randint(0, 3, (env.n, 2), device=device)]
-            if action_schema == FINE_ACTION_SCHEMA:
+            if action_schema == CONTINUOUS_ACTION_SCHEMA:
+                random_rows[:, :, 2] = (
+                    torch.rand((env.n, 2), dtype=torch.float64, device=device) * 40.0 - 20.0)
+            elif action_schema == FINE_ACTION_SCHEMA:
                 yaw_values = torch.arange(-20.0, 20.1, 5.0,
                                           dtype=torch.float64, device=device)
+                random_rows[:, :, 2] = yaw_values[
+                    torch.randint(0, len(yaw_values), (env.n, 2), device=device)]
             else:
                 yaw_values = torch.tensor(YAW, dtype=torch.float64, device=device)
-            random_rows[:, :, 2] = yaw_values[
-                torch.randint(0, len(yaw_values), (env.n, 2), device=device)]
+                random_rows[:, :, 2] = yaw_values[
+                    torch.randint(0, len(yaw_values), (env.n, 2), device=device)]
             random_rows[:, :, 5] = (random_rows[:, :, 0] > 0).to(torch.float64)
             rows = torch.where(perturb[:, :, None], random_rows, rows)
         examples.append(obs.reshape(-1, N_OBS).clone())
-        targets.append(torch.stack(labels, dim=1).reshape(-1, len(HEADS)))
+        targets.append(torch.stack(labels, dim=1).reshape(-1, N_ACT))
         next_obs, _, done, _, _ = env.step(rows, repeat=repeat)
         next_obs = env_tensor(next_obs, device)
         done_t = env_tensor(done, device).bool()
@@ -217,9 +316,14 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
     # Attack and large turn corrections are rare in a teacher trajectory. Plain
     # aggregate CE reached high accuracy by predicting no-attack/straight, which
     # reproduced the real deployment failure. Balance every categorical head.
+    categorical_sizes = (CONTINUOUS_HEADS if action_schema == CONTINUOUS_ACTION_SCHEMA
+                         else HEADS)
+    categorical_cols = (CONTINUOUS_DISCRETE_COLS
+                        if action_schema == CONTINUOUS_ACTION_SCHEMA
+                        else tuple(range(len(HEADS))))
     class_weights = []
-    for head, size in enumerate(HEADS):
-        counts = torch.bincount(y[:, head], minlength=size).float().clamp_min(1.0)
+    for col, size in zip(categorical_cols, categorical_sizes):
+        counts = torch.bincount(y[:, col].long(), minlength=size).float().clamp_min(1.0)
         weights = (counts.sum() / (float(size) * counts)).clamp_max(10.0)
         class_weights.append(weights)
     loss_total = 0.0
@@ -228,9 +332,18 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
         order = torch.randperm(x.shape[0], device=device)
         for start in range(0, x.shape[0], minibatch):
             ix = order[start:start + minibatch]
-            logits, _ = policy(x[ix])
-            losses = [F.cross_entropy(logits[h], y[ix, h], weight=class_weights[h])
-                      for h in range(len(HEADS))]
+            actor, _ = policy(x[ix])
+            if action_schema == CONTINUOUS_ACTION_SCHEMA:
+                losses = [F.cross_entropy(actor["categorical"][h],
+                                          y[ix, col].long(), weight=class_weights[h])
+                          for h, col in enumerate(categorical_cols)]
+                yaw_target = torch.atanh(
+                    (y[ix, 2] / YAW_LIMIT).clamp(-0.995, 0.995))
+                losses.append(F.smooth_l1_loss(actor["yaw_mean"], yaw_target))
+            else:
+                losses = [F.cross_entropy(actor[h], y[ix, h].long(),
+                                          weight=class_weights[h])
+                          for h in range(len(HEADS))]
             loss = torch.stack(losses).sum()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -241,19 +354,29 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
     # Report final-model accuracy, not the misleading average of stale predictions
     # made throughout optimization. Per-head values expose collapse on rare but
     # essential turn and attack decisions that aggregate accuracy can conceal.
-    correct = torch.zeros(len(HEADS), dtype=torch.float64, device=device)
+    correct = torch.zeros(len(categorical_cols), dtype=torch.float64, device=device)
+    yaw_abs_error = torch.tensor(0.0, dtype=torch.float64, device=device)
     with torch.no_grad():
         for start in range(0, x.shape[0], minibatch):
-            logits, _ = policy(x[start:start + minibatch])
+            actor, _ = policy(x[start:start + minibatch])
             yy = y[start:start + minibatch]
-            for h in range(len(HEADS)):
-                correct[h] += (logits[h].argmax(-1) == yy[:, h]).sum()
+            logits = (actor["categorical"] if action_schema == CONTINUOUS_ACTION_SCHEMA
+                      else actor)
+            for h, col in enumerate(categorical_cols):
+                correct[h] += (logits[h].argmax(-1) == yy[:, col].long()).sum()
+            if action_schema == CONTINUOUS_ACTION_SCHEMA:
+                yaw_abs_error += (YAW_LIMIT * torch.tanh(actor["yaw_mean"])
+                                  - yy[:, 2]).abs().sum().double()
     head_accuracy = (correct / x.shape[0]).cpu().tolist()
     metrics = {"bc_loss": loss_total / max(1, updates),
                "bc_accuracy": float(np.mean(head_accuracy))}
-    names = (("forward", "strafe", "yaw_coarse", "yaw_fine", "jump", "sprint", "attack")
-             if action_schema == FINE_ACTION_SCHEMA else
-             ("forward", "strafe", "yaw", "pitch", "jump", "sprint", "attack"))
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        names = ("forward", "strafe", "jump", "sprint", "attack")
+        metrics["bc_yaw_mae_deg"] = float(yaw_abs_error / x.shape[0])
+    elif action_schema == FINE_ACTION_SCHEMA:
+        names = ("forward", "strafe", "yaw_coarse", "yaw_fine", "jump", "sprint", "attack")
+    else:
+        names = ("forward", "strafe", "yaw", "pitch", "jump", "sprint", "attack")
     metrics.update({f"bc_accuracy_{name}": head_accuracy[h]
                     for h, name in enumerate(names)})
     return obs, metrics
@@ -287,17 +410,20 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
     distance_sum = 0.0
     first_hit = torch.full((n,), -1, dtype=torch.int64, device=device)
     for step in range(horizon):
-        logits, _ = policy(obs[:, 0])
+        actor, _ = policy(obs[:, 0])
         if stochastic:
-            a0, _, _ = sample_actions(logits)
+            a0, _, _ = sample_actions(actor, action_schema)
         else:
-            a0 = torch.stack([x.argmax(-1) for x in logits], dim=-1)
+            a0 = greedy_actions(actor, action_schema)
         lateral, longitudinal = obs[:, 0, 5], obs[:, 0, 6]
         bearing = torch.atan2(lateral.abs(), longitudinal) * (180.0 / np.pi)
         distance = obs[:, 0, 10] * 32.0
         behind = longitudinal < 0.0
         forward = a0[:, 0] == 2
-        if action_schema == FINE_ACTION_SCHEMA:
+        if action_schema == CONTINUOUS_ACTION_SCHEMA:
+            yaw_delta = a0[:, 2]
+            saturated = yaw_delta.abs() >= (YAW_LIMIT - 0.1)
+        elif action_schema == FINE_ACTION_SCHEMA:
             yaw_delta = (a0[:, 2] - 1) * 15 + (a0[:, 3] - 1) * 5
             saturated = yaw_delta.abs() == 20
         else:
@@ -317,8 +443,14 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
             rows[:, 1] = scripted_baseline(obs[:, 1], device, attack=True,
                                            action_schema=action_schema)
         elif opponent == "random":
-            random_actions = torch.stack(
-                [torch.randint(size, (n,), device=device) for size in HEADS], dim=-1)
+            if action_schema == CONTINUOUS_ACTION_SCHEMA:
+                random_actions = torch.zeros((n, N_ACT), device=device)
+                for size, col in zip(CONTINUOUS_HEADS, CONTINUOUS_DISCRETE_COLS):
+                    random_actions[:, col] = torch.randint(size, (n,), device=device)
+                random_actions[:, 2] = torch.rand(n, device=device) * 40.0 - 20.0
+            else:
+                random_actions = torch.stack(
+                    [torch.randint(size, (n,), device=device) for size in HEADS], dim=-1)
             rows[:, 1] = decode_actions(random_actions, device, action_schema)
         obs, reward, done, hs, dmg = env.step(rows, repeat=repeat)
         obs = env_tensor(obs, device)
@@ -368,9 +500,11 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
 
 def main():
     action_schema = os.environ.get("PVP_ACTION_SCHEMA", FINE_ACTION_SCHEMA)
-    if action_schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA):
+    if action_schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
+                             CONTINUOUS_ACTION_SCHEMA):
         raise ValueError(f"unsupported PVP_ACTION_SCHEMA {action_schema}")
-    default_repeat = "1" if action_schema == FINE_ACTION_SCHEMA else "4"
+    default_repeat = ("1" if action_schema in
+                      (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA) else "4")
     cfg = {
         "n": int(os.environ.get("PVP_N", "4096")),
         "rollout": int(os.environ.get("PVP_ROLLOUT", "64")),
@@ -390,8 +524,11 @@ def main():
         "bc_steps": int(os.environ.get("PVP_BC_STEPS", "64")),
         "bc_epochs": int(os.environ.get("PVP_BC_EPOCHS", "4")),
         "bc_perturb": float(os.environ.get(
-            "PVP_BC_PERTURB", "0.25" if action_schema == FINE_ACTION_SCHEMA else "0")),
-        "checkpoint_contract": "netherite_pvp_actor_critic_v2",
+            "PVP_BC_PERTURB", "0.25" if action_schema in
+            (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA) else "0")),
+        "checkpoint_contract": ("netherite_pvp_mixed_actor_critic_v3"
+                                if action_schema == CONTINUOUS_ACTION_SCHEMA
+                                else "netherite_pvp_actor_critic_v2"),
         "observation_schema": "egocentric_state_24_v2",
         "obs_basis": "movement_v2",
         "action_schema": action_schema,
@@ -411,7 +548,8 @@ def main():
                           (HERE / "pvp_cuda.so").exists() else "cpu")
     # Independent policies avoid the exact gradient cancellation of one shared
     # policy receiving both sides of a symmetric zero-sum encounter.
-    policies = [Policy().to(device), Policy().to(device)]
+    policies = [Policy(action_schema=action_schema).to(device),
+                Policy(action_schema=action_schema).to(device)]
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
                   for p in policies]
     env = VecPvp(cfg["n"], device=device.index or 0)
@@ -461,8 +599,8 @@ def main():
             with torch.no_grad():
                 role_out = []
                 for role in range(2):
-                    logits, value = policies[role](obs[:, role])
-                    action, logp, _ = sample_actions(logits)
+                    actor, value = policies[role](obs[:, role])
+                    action, logp, _ = sample_actions(actor, cfg["action_schema"])
                     role_out.append((action, logp, value))
                 action = torch.stack([x[0] for x in role_out], dim=1)
                 logp = torch.stack([x[1] for x in role_out], dim=1)
@@ -542,8 +680,9 @@ def main():
                 order = torch.randperm(total, device=device)
                 for start in range(0, total, cfg["minibatch"]):
                     ix = order[start:start + cfg["minibatch"]]
-                    logits, value_now = policies[role](bobs[ix, role])
-                    newlogp, entropy = evaluate_actions(logits, bact[ix, role])
+                    actor, value_now = policies[role](bobs[ix, role])
+                    newlogp, entropy = evaluate_actions(
+                        actor, bact[ix, role], cfg["action_schema"])
                     ratio = (newlogp - blogp[ix, role]).exp()
                     pg1 = ratio * adv[ix]
                     pg2 = ratio.clamp(1.0 - cfg["clip"],
@@ -561,8 +700,9 @@ def main():
                         # trust-region quantity we actually care about, this avoids
                         # retaining an autograd output across backward/step and then
                         # mistaking that stale tensor for the updated policy.
-                        post_logits, _ = policies[role](bobs[ix, role])
-                        post_logp, _ = evaluate_actions(post_logits, bact[ix, role])
+                        post_actor, _ = policies[role](bobs[ix, role])
+                        post_logp, _ = evaluate_actions(
+                            post_actor, bact[ix, role], cfg["action_schema"])
                         logratio = post_logp - blogp[ix, role]
                         kl = ((logratio.exp() - 1.0) - logratio).mean()
                         post_ratio = logratio.exp()

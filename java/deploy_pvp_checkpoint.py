@@ -21,9 +21,9 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "blaze" / "pvp"))
-from train_selfplay import (FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA, FWD,
-                            PITCH, STRAFE, YAW, YAW_FINE, Policy,
-                            checkpoint_action_schema)
+from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
+                            LEGACY_ACTION_SCHEMA, FWD, PITCH, STRAFE, YAW,
+                            YAW_FINE, YAW_LIMIT, Policy, checkpoint_action_schema)
 
 
 LEGACY_HEAD_VALUES = (FWD, STRAFE, YAW, PITCH,
@@ -99,8 +99,24 @@ def observation(players, role, legacy=False):
 
 @torch.no_grad()
 def policy_action(policy, obs, stochastic=False,
-                  action_schema=LEGACY_ACTION_SCHEMA):
-    logits, _ = policy(torch.from_numpy(obs).unsqueeze(0))
+                  action_schema=LEGACY_ACTION_SCHEMA,
+                  sample_continuous_yaw=False):
+    actor, _ = policy(torch.from_numpy(obs).unsqueeze(0))
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        logits = actor["categorical"]
+        if stochastic:
+            indices = [int(torch.distributions.Categorical(logits=h).sample())
+                       for h in logits]
+        else:
+            indices = [int(h.argmax(-1)) for h in logits]
+        yaw_latent = actor["yaw_mean"]
+        if sample_continuous_yaw:
+            std = actor["yaw_log_std"].clamp(-4.0, 0.0).exp()
+            yaw_latent = torch.distributions.Normal(yaw_latent, std).sample()
+        yaw = float(YAW_LIMIT * torch.tanh(yaw_latent)[0])
+        return [FWD[indices[0]], STRAFE[indices[1]], yaw, 0.0,
+                float(indices[2]), float(indices[3]), float(indices[4])]
+    logits = actor
     if stochastic:
         indices = [int(torch.distributions.Categorical(logits=h).sample()) for h in logits]
     else:
@@ -150,6 +166,8 @@ def main():
     parser.add_argument("--repeat-seconds", type=float,
                         help="defaults to the checkpoint's control frequency")
     parser.add_argument("--stochastic", action="store_true")
+    parser.add_argument("--sample-continuous-yaw", action="store_true",
+                        help="sample yaw too; default uses its smooth mean")
     parser.add_argument("--stop-on-death", action="store_true",
                         help="record the terminal state and end after the first fight")
     parser.add_argument("--realtime-client-path", action="store_true",
@@ -172,8 +190,10 @@ def main():
     # A bridge step already blocks until the following client tick. Fine-control
     # checkpoints therefore need no additional sleep to run at nominal 20 Hz.
     repeat_seconds = (args.repeat_seconds if args.repeat_seconds is not None else
-                      (0.0 if action_schema == FINE_ACTION_SCHEMA else 0.2))
-    policies = [Policy().eval(), Policy().eval()]
+                      (0.0 if action_schema in
+                       (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA) else 0.2))
+    policies = [Policy(action_schema=action_schema).eval(),
+                Policy(action_schema=action_schema).eval()]
     for role in range(2):
         policies[role].load_state_dict(checkpoint["models"][role])
     bridge(25575, {"cmd": "overclock", "action": {"ms": 50}})
@@ -201,7 +221,8 @@ def main():
                 players = client_players
                 raw = [policy_action(
                            policies[r], observation(players, r, legacy=legacy_observation),
-                           args.stochastic, action_schema)
+                           args.stochastic, action_schema,
+                           args.sample_continuous_yaw)
                        for r in range(2)]
                 futures = [pool.submit(bridge, 25575 + r,
                                        {"cmd": "step", "action":
@@ -253,7 +274,8 @@ def main():
                 continue
             raw = [policy_action(
                        policies[r], observation(players, r, legacy=legacy_observation),
-                       args.stochastic, action_schema)
+                       args.stochastic, action_schema,
+                       args.sample_continuous_yaw)
                    for r in range(2)]
             futures = [pool.submit(bridge, 25575 + r,
                                    {"cmd": "step", "action": client_action(raw[r])})

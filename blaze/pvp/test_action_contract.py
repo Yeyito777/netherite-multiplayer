@@ -11,14 +11,16 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from pvp import CPU_SO, CUDA_SO, N_ACT, VecPvp
-from train_selfplay import (FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA,
-                            checkpoint_action_schema, decode_actions,
-                            scripted_action_indices)
+from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
+                            LEGACY_ACTION_SCHEMA, Policy, checkpoint_action_schema,
+                            decode_actions, evaluate_actions, greedy_actions,
+                            sample_actions, scripted_action_indices)
 
 
 def test_checkpoint_schema_is_explicit_and_legacy_missing_is_frozen():
     assert checkpoint_action_schema({}) == LEGACY_ACTION_SCHEMA
     assert checkpoint_action_schema({"action_schema": FINE_ACTION_SCHEMA}) == FINE_ACTION_SCHEMA
+    assert checkpoint_action_schema({"action_schema": CONTINUOUS_ACTION_SCHEMA}) == CONTINUOUS_ACTION_SCHEMA
     try:
         checkpoint_action_schema({"action_schema": "invented"})
     except ValueError:
@@ -53,6 +55,38 @@ def test_teacher_turns_symmetrically_and_uses_fine_residual():
     assert decoded[0, 2] == -5
     assert decoded[1, 2] == 5
     assert decoded[2, 0] == 0 and decoded[2, 5] == 0
+
+
+def test_continuous_yaw_is_bounded_exact_and_pitch_stays_fixed():
+    actions = torch.zeros((5, N_ACT))
+    actions[:, 0:2] = 1
+    actions[:, 2] = torch.tensor([-20.0, -7.25, 0.0, 3.125, 20.0])
+    decoded = decode_actions(actions, torch.device("cpu"), CONTINUOUS_ACTION_SCHEMA)
+    torch.testing.assert_close(decoded[:, 2], actions[:, 2].double())
+    assert decoded[:, 3].tolist() == [0.0] * 5
+
+
+def test_continuous_policy_logprob_roundtrip_and_greedy_mean():
+    torch.manual_seed(4)
+    policy = Policy(action_schema=CONTINUOUS_ACTION_SCHEMA)
+    actor, _ = policy(torch.randn(32, 24))
+    sampled, old_logp, entropy = sample_actions(actor, CONTINUOUS_ACTION_SCHEMA)
+    new_logp, new_entropy = evaluate_actions(actor, sampled, CONTINUOUS_ACTION_SCHEMA)
+    torch.testing.assert_close(new_logp, old_logp)
+    torch.testing.assert_close(new_entropy, entropy)
+    greedy = greedy_actions(actor, CONTINUOUS_ACTION_SCHEMA)
+    assert bool((greedy[:, 2].abs() < 20.0).all())
+    assert bool((sampled[:, 2].abs() < 20.0).all())
+
+
+def test_continuous_teacher_preserves_unquantized_correction():
+    obs = torch.zeros((2, 24))
+    obs[:, 6] = 1.0
+    obs[:, 5] = torch.tensor([0.123, -0.123])
+    obs[:, 10] = 8.0 / 32.0
+    labels = scripted_action_indices(obs, action_schema=CONTINUOUS_ACTION_SCHEMA)
+    assert labels[0, 2] < 0 < labels[1, 2]
+    assert not math.isclose(abs(float(labels[0, 2])) % 5.0, 0.0, abs_tol=1e-4)
 
 
 def test_native_one_tick_applies_exact_fine_yaw_delta():

@@ -32,3 +32,18 @@ New checkpoints also record:
 - `obs_basis=movement_v2`;
 - `control_hz=20`;
 - `repeat=1`.
+
+## `continuous_yaw_20hz_v3`
+
+- `repeat=1`, nominal control rate 20 Hz;
+- forward, strafe, jump, sprint, and attack remain categorical with actor shape
+  `(3,3,2,2,2)`;
+- yaw is a tanh-squashed Gaussian bounded to `(-20,+20)` degrees per tick;
+- PPO uses the transformed distribution log probability, including its scale and
+  tanh-Jacobian correction;
+- training samples yaw for exploration, while real deployment uses the yaw mean
+  by default and may independently sample the tactical categorical heads;
+- pitch remains fixed at zero for the flat boxing MVP;
+- checkpoints record
+  `checkpoint_contract=netherite_pvp_mixed_actor_critic_v3` and are not shape
+  compatible with v1/v2 actor heads.

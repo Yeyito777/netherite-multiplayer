@@ -9,9 +9,9 @@ import numpy as np
 import torch
 
 from pvp import N_ACT, VecPvp
-from train_selfplay import (FINE_ACTION_SCHEMA, Policy,
+from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, FINE_ACTION_SCHEMA, Policy,
                             checkpoint_action_schema, decode_actions, env_tensor,
-                            sample_actions)
+                            greedy_actions, sample_actions, YAW_LIMIT)
 
 
 @torch.no_grad()
@@ -19,7 +19,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         swap_policies=False):
     torch.manual_seed(seed)
     device = torch.device("cpu")
-    policies = [Policy().eval(), Policy().eval()]
+    policies = [Policy(action_schema=action_schema).eval(),
+                Policy(action_schema=action_schema).eval()]
     for role, policy in enumerate(policies):
         source_role = 1 - role if swap_policies else role
         policy.load_state_dict(checkpoint["models"][source_role])
@@ -37,16 +38,18 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         "bearing_under_15": 0, "behind": 0, "forward_while_behind": 0,
         "inside_reach": 0, "near_wall": 0, "forward": 0,
         "yaw_nonzero": 0, "yaw_saturated": 0, "distance_sum": 0.0,
+        "yaw_abs_sum": 0.0, "yaw_variation_sum": 0.0, "yaw_sign_reversals": 0,
     }
+    previous_yaw = None
     first_hit = torch.full((episodes, 2), -1, dtype=torch.int64)
     for step in range(horizon):
         actions = []
         for role in range(2):
-            logits, _ = policies[role](obs[:, role])
+            actor, _ = policies[role](obs[:, role])
             if stochastic:
-                action, _, _ = sample_actions(logits)
+                action, _, _ = sample_actions(actor, action_schema)
             else:
-                action = torch.stack([head.argmax(-1) for head in logits], dim=-1)
+                action = greedy_actions(actor, action_schema)
             actions.append(action)
         action_tensor = torch.stack(actions, dim=1)
         # Pursuit quality is measured before applying this decision and only for
@@ -61,11 +64,16 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         forward = action_tensor[:, :, 0] == 2
         yaw_coarse = action_tensor[:, :, 2]
         yaw_fine = action_tensor[:, :, 3]
-        if action_schema == FINE_ACTION_SCHEMA:
+        if action_schema == CONTINUOUS_ACTION_SCHEMA:
+            yaw_delta = yaw_coarse
+            yaw_nonzero = yaw_delta.abs() > 0.1
+            yaw_saturated = yaw_delta.abs() >= (YAW_LIMIT - 0.1)
+        elif action_schema == FINE_ACTION_SCHEMA:
             yaw_delta = ((yaw_coarse - 1) * 15 + (yaw_fine - 1) * 5)
             yaw_nonzero = yaw_delta != 0
             yaw_saturated = yaw_delta.abs() == 20
         else:
+            yaw_delta = (yaw_coarse - 1) * 15
             yaw_nonzero = yaw_coarse != 1
             yaw_saturated = (yaw_coarse == 0) | (yaw_coarse == 2)
         wall = obs[:, :, 20:24].amin(-1) < 0.05
@@ -79,6 +87,15 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         pursuit["forward"] += int((forward & active_players).sum())
         pursuit["yaw_nonzero"] += int((yaw_nonzero & active_players).sum())
         pursuit["yaw_saturated"] += int((yaw_saturated & active_players).sum())
+        pursuit["yaw_abs_sum"] += float((yaw_delta.abs() * active_players).sum())
+        if previous_yaw is not None:
+            pursuit["yaw_variation_sum"] += float(
+                ((yaw_delta - previous_yaw).abs() * active_players).sum())
+            pursuit["yaw_sign_reversals"] += int(
+                (((yaw_delta * previous_yaw) < 0.0) &
+                 (yaw_delta.abs() > 0.1) & (previous_yaw.abs() > 0.1) &
+                 active_players).sum())
+        previous_yaw = yaw_delta.clone()
         pursuit["distance_sum"] += float(distance[active_players].sum())
         rows = decode_actions(action_tensor, device, action_schema)
         obs, reward, done, hs, dmg = env.step(rows, repeat=repeat)
@@ -132,6 +149,10 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         "forward_fraction": pursuit["forward"] / player_steps,
         "yaw_nonzero_fraction": pursuit["yaw_nonzero"] / player_steps,
         "yaw_saturated_fraction": pursuit["yaw_saturated"] / player_steps,
+        "mean_abs_yaw_delta_deg": pursuit["yaw_abs_sum"] / player_steps,
+        "mean_abs_yaw_variation_deg": pursuit["yaw_variation_sum"] / player_steps,
+        "yaw_sign_reversals_per_1000_player_steps":
+            1000.0 * pursuit["yaw_sign_reversals"] / player_steps,
         "mean_distance_blocks": pursuit["distance_sum"] / player_steps,
         "mean_decisions_to_first_hit": (float(observed_first_hits.float().mean())
                                         if len(observed_first_hits) else None),
