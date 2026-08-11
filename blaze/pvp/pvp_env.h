@@ -6,7 +6,7 @@
 #include "../core/pvp_arena.h"
 
 #define PVP_ACT 7
-#define PVP_OBS 24
+#define PVP_OBS 25
 
 /* Raw action row: forward, strafe, dyaw, dpitch, jump, sprint, attack. */
 MC_HD static inline PvpAction pvp_decode_action(const double *a, int rep) {
@@ -81,6 +81,9 @@ MC_HD static inline void pvp_observe_one(const PvpMatch *m,
     o[21] = (float)((PVP_ARENA_MAX - p->x) / 32.0);
     o[22] = (float)((p->z - PVP_ARENA_MIN) / 32.0);
     o[23] = (float)((PVP_ARENA_MAX - p->z) / 32.0);
+    /* Continuous-look policies need accumulated pitch to close the loop.
+     * Older policies consume the unchanged 24-value prefix. */
+    o[24] = p->pitch / 90.0F;
 }
 
 MC_HD static inline void pvp_observe_match(const PvpMatch *m,

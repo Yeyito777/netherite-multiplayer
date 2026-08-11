@@ -47,3 +47,17 @@ New checkpoints also record:
 - checkpoints record
   `checkpoint_contract=netherite_pvp_mixed_actor_critic_v3` and are not shape
   compatible with v1/v2 actor heads.
+
+## `continuous_look_20hz_v4`
+
+- retains v3's categorical tactical heads and continuous yaw;
+- adds an independent tanh-squashed Gaussian pitch delta bounded to
+  `(-10,+10)` degrees per tick;
+- appends normalized accumulated pitch to the observation, producing
+  `egocentric_state_25_v3`; the first 24 values remain byte-for-byte compatible;
+- the behavior-cloning teacher aims from the player's eye to the opponent AABB
+  center and regresses both unquantized angular corrections;
+- training samples both look axes, while deployment uses both means by default;
+- checkpoints record
+  `checkpoint_contract=netherite_pvp_mixed_look_actor_critic_v4` and are not
+  shape compatible with earlier actor or observation layers.

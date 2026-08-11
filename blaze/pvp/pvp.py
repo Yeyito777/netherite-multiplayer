@@ -7,7 +7,7 @@ CPU_SO = os.path.join(HERE, "pvp_cpu.so")
 CUDA_SO = os.path.join(HERE, "pvp_cuda.so")
 N_PLAYERS = 2
 N_ACT = 7
-N_OBS = 24
+N_OBS = 25
 
 
 class VecPvp:

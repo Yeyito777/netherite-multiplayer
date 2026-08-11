@@ -11,16 +11,17 @@ import pytest
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from pvp import CPU_SO, CUDA_SO, N_ACT, VecPvp
-from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
-                            LEGACY_ACTION_SCHEMA, Policy, checkpoint_action_schema,
-                            decode_actions, evaluate_actions, greedy_actions,
-                            sample_actions, scripted_action_indices)
+from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
+                            FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA, Policy,
+                            checkpoint_action_schema, decode_actions, evaluate_actions,
+                            greedy_actions, sample_actions, scripted_action_indices)
 
 
 def test_checkpoint_schema_is_explicit_and_legacy_missing_is_frozen():
     assert checkpoint_action_schema({}) == LEGACY_ACTION_SCHEMA
     assert checkpoint_action_schema({"action_schema": FINE_ACTION_SCHEMA}) == FINE_ACTION_SCHEMA
     assert checkpoint_action_schema({"action_schema": CONTINUOUS_ACTION_SCHEMA}) == CONTINUOUS_ACTION_SCHEMA
+    assert checkpoint_action_schema({"action_schema": CONTINUOUS_LOOK_ACTION_SCHEMA}) == CONTINUOUS_LOOK_ACTION_SCHEMA
     try:
         checkpoint_action_schema({"action_schema": "invented"})
     except ValueError:
@@ -87,6 +88,34 @@ def test_continuous_teacher_preserves_unquantized_correction():
     labels = scripted_action_indices(obs, action_schema=CONTINUOUS_ACTION_SCHEMA)
     assert labels[0, 2] < 0 < labels[1, 2]
     assert not math.isclose(abs(float(labels[0, 2])) % 5.0, 0.0, abs_tol=1e-4)
+
+
+def test_continuous_look_policy_and_teacher_control_both_axes():
+    torch.manual_seed(9)
+    policy = Policy(action_schema=CONTINUOUS_LOOK_ACTION_SCHEMA)
+    obs = torch.zeros((16, 25))
+    obs[:, 6] = 3.0 / 32.0
+    labels = scripted_action_indices(obs, action_schema=CONTINUOUS_LOOK_ACTION_SCHEMA)
+    # Same-height player center is below own eye, so the teacher looks downward.
+    assert bool((labels[:, 3] > 0.0).all())
+    actor, _ = policy(obs)
+    sampled, old_logp, _ = sample_actions(actor, CONTINUOUS_LOOK_ACTION_SCHEMA)
+    replay_logp, _ = evaluate_actions(actor, sampled, CONTINUOUS_LOOK_ACTION_SCHEMA)
+    torch.testing.assert_close(replay_logp, old_logp)
+    decoded = decode_actions(sampled, torch.device("cpu"), CONTINUOUS_LOOK_ACTION_SCHEMA)
+    assert bool((decoded[:, 2].abs() < 20.0).all())
+    assert bool((decoded[:, 3].abs() < 10.0).all())
+
+
+def test_pitch_observation_closes_accumulated_control_loop():
+    env = VecPvp(1, so_path=CPU_SO)
+    obs = np.asarray(env.reset(np.asarray([0], dtype=np.uint64))).copy()
+    assert obs.shape[-1] == 25 and obs[0, 0, 24] == 0.0
+    rows = np.zeros((1, 2, N_ACT), dtype=np.float64)
+    rows[0, 0, 3] = 7.25
+    after = np.asarray(env.step(rows, repeat=1)[0]).copy()
+    assert abs(after[0, 0, 24] * 90.0 - 7.25) < 1e-4
+    env.close()
 
 
 def test_native_one_tick_applies_exact_fine_yaw_delta():

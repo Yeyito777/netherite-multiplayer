@@ -21,7 +21,7 @@ def main():
     seeds = np.arange(n, dtype=np.uint64)
     env = VecPvp(n, so_path=os.path.join(HERE, "pvp_cpu.so"))
     initial = env.reset(seeds).copy()
-    assert initial.shape == (n, 2, 24)
+    assert initial.shape == (n, 2, 25)
     assert np.all(initial[:, :, 0:2] == 1.0)
 
     zero = np.zeros((n, 2, 7), dtype=np.float64)
