@@ -81,3 +81,18 @@ In real Minecraft, the two traces used 286 and 289 distinct millidegree-rounded
 yaw values instead of nine. Mean yaw variation fell from V1's 10.82/9.32 to
 1.20/2.28 degrees/tick, and a 306-decision match ended in a vanilla knockout.
 Receipts and video links are under `artifacts/fights/pilot15-continuous-yaw/`.
+
+## V1.2 continuous-look experiment
+
+Pilot 17 adds a pitch Gaussian bounded to +/-10 degrees/tick and appends current
+pitch to the observation. The teacher aims at the opponent AABB center. After
+52.43 million corrected adversarial decisions, deployment-equivalent simulation
+improved bearing error from V1.1's 2.72 to 1.35 degrees and yaw variation from
+0.390 to 0.303 degrees/tick. All 256 fights completed in 487.2 mean ticks.
+
+Pitch settled around 6.17 absolute degrees in simulation, with 1.16-degree mean
+deltas and 1.60-degree variation. In the real 320-decision fight, both agents
+used more than 300 distinct pitch values and finished by knockout, but pitch
+variation rose to 5.25/5.03 degrees/tick. Pilot 17 therefore proves continuous
+two-axis control and is the V1.2 experiment, while visual review should decide
+whether it is smooth enough to tag or needs a pitch-damping iteration.

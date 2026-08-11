@@ -15,16 +15,17 @@ real-Minecraft deployment bridge for private test servers.
 - Two independent feed-forward actor-critic policies trained with behavioral
   cloning, PPO, and adversarial self-play.
 - Batched CPU and CUDA backends with deterministic shared-state combat.
-- Versioned 20 Hz controls: V1's nine-value yaw grid and V1.1's bounded
-  continuous-yaw actor, both at one policy decision per Minecraft tick.
-- Frozen V1 Pilot 13 and V1.1 Pilot 15 checkpoints, each trained for 52.43
-  million adversarial self-play decisions after DAgger behavior cloning.
+- Versioned 20 Hz controls: V1's nine-value yaw grid, V1.1's continuous yaw,
+  and the experimental V1.2 continuous yaw+pitch actor.
+- Frozen V1 Pilot 13, V1.1 Pilot 15, and experimental Pilot 17 checkpoints,
+  each trained for 52.43 million adversarial decisions after DAgger cloning.
 - Real Minecraft 1.11.2 deployment with separate full-frame client recordings.
 
 Start with [`docs/MULTIPLAYER_MVP.md`](docs/MULTIPLAYER_MVP.md),
 [`PVP_SKILL_REPORT.md`](PVP_SKILL_REPORT.md),
-[`artifacts/pilots/pilot13/README.md`](artifacts/pilots/pilot13/README.md), and
-[`artifacts/pilots/pilot15/README.md`](artifacts/pilots/pilot15/README.md).
+[`artifacts/pilots/pilot13/README.md`](artifacts/pilots/pilot13/README.md),
+[`artifacts/pilots/pilot15/README.md`](artifacts/pilots/pilot15/README.md), and
+[`artifacts/pilots/pilot17/README.md`](artifacts/pilots/pilot17/README.md).
 
 ## Monorepo map
 
