@@ -189,9 +189,20 @@ def main():
                         help="continue the currently loaded arena fight")
     parser.add_argument("--setup-seed", type=int, default=130013,
                         help="deterministic asymmetric real-match reset")
+    parser.add_argument("--prepare-video", action="store_true",
+                        help="apply the real-client recording profile before arena setup")
+    parser.add_argument("--render-warmup-seconds", type=float, default=0.0,
+                        help="after setup, hold the fighters still while both clients "
+                             "finish chunk rebuild/JIT work before timed deployment")
+    parser.add_argument("--ready-file", type=Path,
+                        help="touch this after render warm-up, immediately before deployment")
+    parser.add_argument("--start-file", type=Path,
+                        help="when paired with --ready-file, wait for this file before fighting")
     parser.add_argument("--out", type=Path,
                         default=ROOT / "artifacts/java_pvp_deployment.jsonl")
     args = parser.parse_args()
+    if (args.ready_file is None) != (args.start_file is None):
+        parser.error("--ready-file and --start-file must be used together")
 
     # These policies are tiny MLPs.  A multithreaded BLAS dispatch costs more
     # than the matrix multiplies and makes the dual-client tick barrier jittery.
@@ -211,6 +222,14 @@ def main():
     for role in range(2):
         policies[role].load_state_dict(checkpoint["models"][role])
     bridge(25575, {"cmd": "overclock", "action": {"ms": 50}})
+    if args.prepare_video:
+        # Apply this before setup so the teleport rebuilds only the nearby arena.
+        with ThreadPoolExecutor(max_workers=2) as prepare_pool:
+            prepared = [prepare_pool.submit(bridge, 25575 + r,
+                                             {"cmd": "video_prepare"})
+                        for r in range(2)]
+            for result in prepared:
+                result.result()
     if not args.no_setup:
         rng = np.random.default_rng(args.setup_seed)
         bridge(25575, {"cmd": "pvp_setup", "action": {
@@ -223,8 +242,24 @@ def main():
     totals = {"hits0": 0, "hits1": 0, "damage0": 0.0, "damage1": 0.0,
               "deaths0": 0, "deaths1": 0}
     completed_decisions = 0
-    started = time.time()
     with args.out.open("w") as receipt, ThreadPoolExecutor(max_workers=2) as pool:
+        # pvp_setup teleports both players and invalidates a large part of each
+        # render view. Recording immediately used to catch chunk rebuild and JVM
+        # warm-up as several seconds of duplicate/low-FPS frames. Polling both
+        # clients at tick rate holds gameplay still while allowing their render
+        # loops to settle. Deployment timing deliberately starts afterwards.
+        warmup_started = time.monotonic()
+        while time.monotonic() - warmup_started < args.render_warmup_seconds:
+            warm = [pool.submit(bridge, 25575 + r, {"cmd": "obs"})
+                    for r in range(2)]
+            for future in warm:
+                future.result()
+        if args.ready_file is not None:
+            args.ready_file.parent.mkdir(parents=True, exist_ok=True)
+            args.ready_file.touch()
+            while not args.start_file.exists():
+                time.sleep(0.005)
+        started = time.time()
         client_players = None
         if args.realtime_client_path:
             initial = [pool.submit(bridge, 25575 + r, {"cmd": "obs"})

@@ -720,6 +720,7 @@ public class Recorder {
             case "capture_lightmap": case "capture_limbanim": case "capture_lightprop":
             case "capture_chunkrebuild": case "runcmds": case "dim": case "kmode":
             case "reload_renderers": case "open_lan": case "connect":
+            case "video_prepare":
             case "pvp_setup": case "pvp_state": case "pvp_attack":
             case "portal_touch": case "use_end_eye": case "set_pose": case "hud_pin":
             case "entity_pin":
@@ -4620,6 +4621,28 @@ sb.append("}");
         // "no real GL" (null strings) / "FBO never rendered to" / "readback broken"
         // (clear-to-red test: clear the MC FBO red, read its texture back).
         // mouse-look debugging for the mcwindow human-play route
+        if (r.cmd.equals("video_prepare")) {
+            try {
+                // A dual-client recording should spend its budget on player and
+                // camera motion, not distant flat-world chunks. These settings
+                // retain the complete 32x32 arena while avoiding startup chunk
+                // rebuild stalls and keep encoding load from lowering render FPS.
+                mc.gameSettings.pauseOnLostFocus = false;
+                mc.gameSettings.limitFramerate = 120;
+                mc.gameSettings.enableVsync = false;
+                mc.gameSettings.renderDistanceChunks = 3;
+                mc.gameSettings.fancyGraphics = false;
+                mc.gameSettings.ambientOcclusion = 0;
+                mc.gameSettings.clouds = 0;
+                mc.gameSettings.particleSetting = 1;
+                mc.gameSettings.entityShadows = false;
+                mc.renderGlobal.loadRenderers();
+                reply(r, "{\"ok\":true,\"fps\":" + Minecraft.debugFPS
+                    + ",\"render_distance\":" + mc.gameSettings.renderDistanceChunks + "}");
+            } catch (Throwable t) { reply(r, err("video_prepare: " + t)); }
+            return;
+        }
+
         if (r.cmd.equals("focusdiag")) {
             try {
                 boolean act = org.lwjgl.opengl.Display.isActive();
