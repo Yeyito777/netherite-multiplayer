@@ -4636,9 +4636,18 @@ sb.append("}");
                 mc.gameSettings.clouds = 0;
                 mc.gameSettings.particleSetting = 1;
                 mc.gameSettings.entityShadows = false;
+                // Deterministic fight audio: retain movement, punches, and hurt
+                // sounds, but suppress nondeterministic background music. Each
+                // client is routed to its own PulseAudio/PipeWire null sink by
+                // the capture launcher, so a POV receives only its own mix.
+                mc.gameSettings.setSoundLevel(net.minecraft.util.SoundCategory.MASTER, 1.0F);
+                mc.gameSettings.setSoundLevel(net.minecraft.util.SoundCategory.PLAYERS, 1.0F);
+                mc.gameSettings.setSoundLevel(net.minecraft.util.SoundCategory.BLOCKS, 1.0F);
+                mc.gameSettings.setSoundLevel(net.minecraft.util.SoundCategory.MUSIC, 0.0F);
                 mc.renderGlobal.loadRenderers();
                 reply(r, "{\"ok\":true,\"fps\":" + Minecraft.debugFPS
-                    + ",\"render_distance\":" + mc.gameSettings.renderDistanceChunks + "}");
+                    + ",\"render_distance\":" + mc.gameSettings.renderDistanceChunks
+                    + ",\"audio\":true}");
             } catch (Throwable t) { reply(r, err("video_prepare: " + t)); }
             return;
         }
