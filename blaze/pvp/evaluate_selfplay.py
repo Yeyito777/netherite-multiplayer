@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Evaluate both policies from a checkpoint head-to-head without learning."""
+import argparse
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from pvp import N_ACT, VecPvp
+from train_selfplay import (FINE_ACTION_SCHEMA, Policy,
+                            checkpoint_action_schema, decode_actions, env_tensor,
+                            sample_actions)
+
+
+@torch.no_grad()
+def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
+        swap_policies=False):
+    torch.manual_seed(seed)
+    device = torch.device("cpu")
+    policies = [Policy().eval(), Policy().eval()]
+    for role, policy in enumerate(policies):
+        source_role = 1 - role if swap_policies else role
+        policy.load_state_dict(checkpoint["models"][source_role])
+    env = VecPvp(episodes)
+    seeds = np.arange(seed, seed + episodes, dtype=np.uint64)
+    obs = env_tensor(env.reset(seeds), device)
+    active = torch.ones(episodes, dtype=torch.bool)
+    wins = [0, 0]
+    draws = 0
+    hits = torch.zeros(2, dtype=torch.int64)
+    damage = torch.zeros(2, dtype=torch.float64)
+    terminal_steps = []
+    pursuit = {
+        "player_steps": 0, "bearing_abs_sum_deg": 0.0,
+        "bearing_under_15": 0, "behind": 0, "forward_while_behind": 0,
+        "inside_reach": 0, "near_wall": 0, "forward": 0,
+        "yaw_nonzero": 0, "yaw_saturated": 0, "distance_sum": 0.0,
+    }
+    first_hit = torch.full((episodes, 2), -1, dtype=torch.int64)
+    for step in range(horizon):
+        actions = []
+        for role in range(2):
+            logits, _ = policies[role](obs[:, role])
+            if stochastic:
+                action, _, _ = sample_actions(logits)
+            else:
+                action = torch.stack([head.argmax(-1) for head in logits], dim=-1)
+            actions.append(action)
+        action_tensor = torch.stack(actions, dim=1)
+        # Pursuit quality is measured before applying this decision and only for
+        # lanes whose first fight is still active. obs[:, role, 5:7] is the
+        # opponent's egocentric lateral/longitudinal displacement.
+        active_players = active[:, None].expand(-1, 2)
+        lateral = obs[:, :, 5]
+        longitudinal = obs[:, :, 6]
+        bearing = torch.atan2(lateral.abs(), longitudinal) * (180.0 / math.pi)
+        distance = obs[:, :, 10] * 32.0
+        behind = longitudinal < 0.0
+        forward = action_tensor[:, :, 0] == 2
+        yaw_coarse = action_tensor[:, :, 2]
+        yaw_fine = action_tensor[:, :, 3]
+        if action_schema == FINE_ACTION_SCHEMA:
+            yaw_delta = ((yaw_coarse - 1) * 15 + (yaw_fine - 1) * 5)
+            yaw_nonzero = yaw_delta != 0
+            yaw_saturated = yaw_delta.abs() == 20
+        else:
+            yaw_nonzero = yaw_coarse != 1
+            yaw_saturated = (yaw_coarse == 0) | (yaw_coarse == 2)
+        wall = obs[:, :, 20:24].amin(-1) < 0.05
+        pursuit["player_steps"] += int(active_players.sum())
+        pursuit["bearing_abs_sum_deg"] += float(bearing[active_players].sum())
+        pursuit["bearing_under_15"] += int(((bearing < 15.0) & active_players).sum())
+        pursuit["behind"] += int((behind & active_players).sum())
+        pursuit["forward_while_behind"] += int((forward & behind & active_players).sum())
+        pursuit["inside_reach"] += int(((distance < 3.0) & active_players).sum())
+        pursuit["near_wall"] += int((wall & active_players).sum())
+        pursuit["forward"] += int((forward & active_players).sum())
+        pursuit["yaw_nonzero"] += int((yaw_nonzero & active_players).sum())
+        pursuit["yaw_saturated"] += int((yaw_saturated & active_players).sum())
+        pursuit["distance_sum"] += float(distance[active_players].sum())
+        rows = decode_actions(action_tensor, device, action_schema)
+        obs, reward, done, hs, dmg = env.step(rows, repeat=repeat)
+        obs = env_tensor(obs, device)
+        active_hits = env_tensor(hs, device)[active]
+        active_damage = env_tensor(dmg, device)[active]
+        hits += active_hits.sum(0).cpu()
+        damage += active_damage.sum(0).cpu()
+        hs_all = env_tensor(hs, device)
+        for role in range(2):
+            landed = (hs_all[:, role] > 0) & active & (first_hit[:, role] < 0)
+            first_hit[landed, role] = step + 1
+        newly = env_tensor(done, device).bool() & active
+        if newly.any():
+            terminal = env_tensor(reward, device)[newly]
+            wins[0] += int((terminal[:, 0] > terminal[:, 1]).sum())
+            wins[1] += int((terminal[:, 1] > terminal[:, 0]).sum())
+            draws += int((terminal[:, 0] == terminal[:, 1]).sum())
+            terminal_steps.extend([step + 1] * int(newly.sum()))
+            active[newly] = False
+        if not active.any():
+            break
+    horizon_draws = int(active.sum())
+    draws += horizon_draws
+    env.close()
+    completed = len(terminal_steps)
+    player_steps = max(1, pursuit["player_steps"])
+    behind_steps = max(1, pursuit["behind"])
+    observed_first_hits = first_hit[first_hit >= 0]
+    return {
+        "mode": "sampled" if stochastic else "greedy",
+        "policy_assignment": "swapped" if swap_policies else "native",
+        "action_schema": action_schema,
+        "episodes": episodes, "horizon_decisions": horizon, "repeat": repeat,
+        "wins_role0": wins[0], "wins_role1": wins[1], "draws": draws,
+        "horizon_draws": horizon_draws,
+        "hits_role0": int(hits[0]), "hits_role1": int(hits[1]),
+        "damage_role0": float(damage[0]), "damage_role1": float(damage[1]),
+        "completed_fights": completed,
+        "mean_decisions_to_death": (sum(terminal_steps) / completed if completed else None),
+        "mean_minecraft_ticks_to_death":
+            (repeat * sum(terminal_steps) / completed if completed else None),
+        "mean_abs_bearing_error_deg": pursuit["bearing_abs_sum_deg"] / player_steps,
+        "bearing_under_15_fraction": pursuit["bearing_under_15"] / player_steps,
+        "behind_fraction": pursuit["behind"] / player_steps,
+        "forward_while_behind_fraction": pursuit["forward_while_behind"] / behind_steps,
+        "forward_while_behind_player_fraction":
+            pursuit["forward_while_behind"] / player_steps,
+        "inside_reach_fraction": pursuit["inside_reach"] / player_steps,
+        "near_wall_fraction": pursuit["near_wall"] / player_steps,
+        "forward_fraction": pursuit["forward"] / player_steps,
+        "yaw_nonzero_fraction": pursuit["yaw_nonzero"] / player_steps,
+        "yaw_saturated_fraction": pursuit["yaw_saturated"] / player_steps,
+        "mean_distance_blocks": pursuit["distance_sum"] / player_steps,
+        "mean_decisions_to_first_hit": (float(observed_first_hits.float().mean())
+                                        if len(observed_first_hits) else None),
+        "mean_minecraft_ticks_to_first_hit":
+            (repeat * float(observed_first_hits.float().mean())
+             if len(observed_first_hits) else None),
+        "first_hit_role_samples": int((first_hit >= 0).sum()),
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("checkpoint", type=Path)
+    ap.add_argument("--episodes", type=int, default=256)
+    ap.add_argument("--horizon", type=int, default=600)
+    ap.add_argument("--repeat", type=int,
+                    help="defaults to the checkpoint's recorded action repeat")
+    ap.add_argument("--seed", type=int, default=700000)
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--include-role-swapped", action="store_true")
+    args = ap.parse_args()
+    ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    config = ck.get("config", {})
+    action_schema = checkpoint_action_schema(config)
+    repeat = args.repeat if args.repeat is not None else int(config.get("repeat", 4))
+    result = {
+        "checkpoint": str(args.checkpoint),
+        "action_schema": action_schema, "repeat": repeat,
+        "greedy": run(ck, args.episodes, args.horizon, repeat, False, args.seed,
+                      action_schema),
+        "sampled": run(ck, args.episodes, args.horizon, repeat, True, args.seed,
+                       action_schema),
+    }
+    if args.include_role_swapped:
+        result["greedy_swapped"] = run(
+            ck, args.episodes, args.horizon, repeat, False, args.seed,
+            action_schema, swap_policies=True)
+        result["sampled_swapped"] = run(
+            ck, args.episodes, args.horizon, repeat, True, args.seed,
+            action_schema, swap_policies=True)
+    text = json.dumps(result, indent=2, sort_keys=True)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text + "\n")
+    print(text)
+
+
+if __name__ == "__main__":
+    main()

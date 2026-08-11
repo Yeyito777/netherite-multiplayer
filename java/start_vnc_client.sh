@@ -16,7 +16,8 @@ export MESA_GL_VERSION_OVERRIDE=2.1      # MC 1.11.2 expects a GL 2.x context
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djavax.accessibility.assistive_technologies="
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # repo root
 MCDIR="$DIR/Minecraft"
-VNCPW="redstone"                         # 8-char VNC password (VNC protocol caps at 8)
+: "${VNC_PASSWORD:?Set VNC_PASSWORD (VNC uses at most the first 8 characters)}"
+VNCPW="$VNC_PASSWORD"
 
 # --- clean any previous session ---
 pkill -f "GradleStart"  2>/dev/null
@@ -57,4 +58,4 @@ GRADLE_NET_FLAG="--offline -x getAssets"; [ "${MC_GRADLE_ONLINE:-0}" = 1 ] && GR
 # -PmcUsername=... / -PqrlPort=...; the JVM gets no invented env vars).
 nohup ./gradlew -g run/gradle $GRADLE_NET_FLAG runClient --stacktrace "$@" > "$DIR/runclient.log" 2>&1 &
 echo "RUNCLIENT_PID $!"
-echo "STARTED display=:1 vncport=5900 pw=$VNCPW  (Mac: ssh -f -N -L 5901:localhost:5900 anvil; open vnc://localhost:5901)"
+echo "STARTED display=:1 vncport=5900 (tunnel localhost:5900 before connecting)"

@@ -8,11 +8,16 @@ crafting, win condition) into data-oriented C that compiles BOTH ways - single-i
 
 This is the sim layer. It is the bigger, more important target than rendering.
 
-The authoritative shipped-simulator scope is `../magma/PRODUCT.md`: survival-only
+The upstream shipped-simulator scope is `../magma/PRODUCT.md`: survival-only
 default-world completion through the End exit portal, vanilla-default superflat as an
 RL arena, optional villages/enchanting/brewing/weather bundles, and explicit cuts for
 redstone, audio, saves, multiplayer, achievements, and side content. Isolated kernels
 outside that contract do not imply product support.
+
+This fork adds a separate, gated two-player shared-world MVP. Its narrow scope,
+transaction ordering, verification gates, and deployment boundary are defined
+in `../docs/MULTIPLAYER_MVP.md`. It does not change the upstream single-player
+product contract or imply a general network server.
 
 ## Fidelity contract (the decision that makes this tractable)
 

@@ -1,7 +1,7 @@
 # netherite (AGENTS.md)
 
-Home: **Anvil-primary** - canonical at `anvil:~/dev/netherite`. Build and run
-here. MacBook is control plane / Moonlight / image viewing only.
+Canonical development is the repository's `main` branch. Build on Linux x86_64;
+GPU training requires NVIDIA CUDA, while real-client deployment also needs JDK 8.
 
 This file is the **only agent entry**. Do not hunt other root markdown for
 instructions. How-tos and history live under `docs/`; living contracts live
@@ -11,7 +11,7 @@ next to the code they govern.
 
 | OS | Role |
 |----|------|
-| **Linux x86_64** | Full stack. Build C/CUDA, run Java oracle, train blaze, sweep. Canonical host: anvil (Ubuntu). Needs JDK 8 + NVIDIA CUDA for GPU paths. |
+| **Linux x86_64** | Full stack. Build C/CUDA, run Java oracle, train blaze, sweep. Needs JDK 8 + NVIDIA CUDA for GPU paths. |
 | **macOS** | Control plane only. SSH, Moonlight/mcwindow viewer, image/video review. **Do not** expect native `runClient` or CUDA here (legacy GL under Rosetta is dead; no Blackwell/CUDA train path). |
 | **Windows** | Not a supported build/run host for this monorepo. Use WSL2 Linux if you must, or a remote Linux box. |
 
@@ -184,11 +184,11 @@ Two things that make a pixel measurement lie, both paid for already:
 
 Python: **UV only** (`uv run`, never bare `pip`/`python` for project work).
 
-## Critical: anvil is headless
+## Headless hosts
 
-- Demos (png/mp4): scp to Mac; do not assume local image display.
-- Human play: Moonlight/Sunshine `:0` or mcwindow (`docs/RUNBOOK.md`).
-- Agent/trace: Xvfb `:1` via `bash java/start_vnc_client.sh` (VNC 5900, pw `redstone`).
+- Export `VNC_PASSWORD` before using either VNC launcher; never commit or print it.
+- Human play can use Moonlight/Sunshine or mcwindow (`docs/RUNBOOK.md`).
+- Agent/trace: Xvfb `:1` via `bash java/start_vnc_client.sh` (VNC is localhost-only).
 - One client owns NetheriteMod port **25575** at a time.
 
 ## Gotchas

@@ -719,7 +719,8 @@ public class Recorder {
             case "capture_ao": case "capture_particle": case "capture_skylight":
             case "capture_lightmap": case "capture_limbanim": case "capture_lightprop":
             case "capture_chunkrebuild": case "runcmds": case "dim": case "kmode":
-            case "reload_renderers":
+            case "reload_renderers": case "open_lan": case "connect":
+            case "pvp_setup": case "pvp_state": case "pvp_attack":
             case "portal_touch": case "use_end_eye": case "set_pose": case "hud_pin":
             case "entity_pin":
             case "dumpblocks": case "frame": case "frame_pair": case "gldiag": case "focusdiag": case "camera": case "sample_light":
@@ -735,6 +736,59 @@ public class Recorder {
         incoming.put(r);
         String result = r.resp.poll(120, TimeUnit.SECONDS); // world-gen can be slow
         return result == null ? err("timeout") : result;
+    }
+
+    private static void pvpResetPlayer(net.minecraft.entity.player.EntityPlayerMP p,
+                                       double x, double y, double z, float yaw) {
+        p.inventory.clear();
+        p.setHealth(p.getMaxHealth());
+        p.getFoodStats().setFoodLevel(20);
+        p.getFoodStats().setFoodSaturationLevel(5.0F);
+        p.extinguish();
+        p.fallDistance = 0.0F;
+        p.hurtResistantTime = 0;
+        p.motionX = p.motionY = p.motionZ = 0.0;
+        p.rotationYaw = yaw;
+        p.rotationPitch = 0.0F;
+        p.setRotationYawHead(yaw);
+        p.setPositionAndUpdate(x, y, z);
+    }
+
+    private static JsonObject pvpPlayerState(
+            net.minecraft.entity.player.EntityPlayerMP p, int role) {
+        if (p == null) throw new IllegalStateException("PvP role " + role + " is disconnected");
+        JsonObject o = new JsonObject();
+        o.addProperty("role", role);
+        o.addProperty("uuid", p.getUniqueID().toString());
+        o.addProperty("name", p.getName());
+        o.addProperty("entity_id", p.getEntityId());
+        JsonArray pos = new JsonArray();
+        pos.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.posX)));
+        pos.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.posY)));
+        pos.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.posZ)));
+        o.add("position_bits", pos);
+        JsonArray motion = new JsonArray();
+        motion.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.motionX)));
+        motion.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.motionY)));
+        motion.add(new com.google.gson.JsonPrimitive(Double.doubleToRawLongBits(p.motionZ)));
+        o.add("motion_bits", motion);
+        JsonArray rotation = new JsonArray();
+        rotation.add(new com.google.gson.JsonPrimitive(Float.floatToRawIntBits(p.rotationYaw)));
+        rotation.add(new com.google.gson.JsonPrimitive(Float.floatToRawIntBits(p.rotationPitch)));
+        o.add("rotation_bits", rotation);
+        o.addProperty("on_ground", p.onGround);
+        o.addProperty("health_bits", Float.floatToRawIntBits(p.getHealth()));
+        o.addProperty("absorption_bits", Float.floatToRawIntBits(p.getAbsorptionAmount()));
+        o.addProperty("food", p.getFoodStats().getFoodLevel());
+        o.addProperty("saturation_bits",
+            Float.floatToRawIntBits(p.getFoodStats().getSaturationLevel()));
+        o.addProperty("sprinting", p.isSprinting());
+        o.addProperty("sneaking", p.isSneaking());
+        o.addProperty("hurt_resistant_time", p.hurtResistantTime);
+        o.addProperty("dead", p.isDead || p.getHealth() <= 0.0F);
+        o.addProperty("attack_cooldown_bits",
+            Float.floatToRawIntBits(p.getCooledAttackStrength(0.0F)));
+        return o;
     }
 
     // ---------------- coverage hook control (render-opt) ----------------
@@ -1269,7 +1323,10 @@ public class Recorder {
         boolean justFinalized = false;
         if (inFlight != null && inFlight.applied) {
             String obs = (mc.player == null) ? err("no player") : obs(mc, rlCamPending);
-            inFlight.resp.offer(obs);
+            // SynchronousQueue.offer without a timeout drops the response if the
+            // socket thread has not entered poll() yet. Two-client PvP makes that
+            // race common and leaves this bridge apparently hung for 120 seconds.
+            reply(inFlight, obs);
             inFlight = null;
             justFinalized = true;
         }
@@ -1285,7 +1342,11 @@ public class Recorder {
         Req polled = null;
         try {
             polled = justFinalized
-                ? incoming.poll(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                // Two independent rendering clients can have tick phases nearly
+                // 25 ms apart.  Keep the fast client at this barrier long enough
+                // for Python to receive the slow client's observation, infer both
+                // actions, and submit the pair without dropping a game tick.
+                ? incoming.poll(40, java.util.concurrent.TimeUnit.MILLISECONDS)
                 : incoming.poll();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
@@ -1453,7 +1514,7 @@ public class Recorder {
         if (r.cmd.equals("overclock")) {
             long ms = r.action.has("ms") ? r.action.get("ms").getAsLong() : 1L;
             TimeHelper.serverTickLength = Math.max(1L, ms);
-            r.resp.offer("{\"ok\":true,\"server_tick_length\":" + TimeHelper.serverTickLength + "}");
+            reply(r, "{\"ok\":true,\"server_tick_length\":" + TimeHelper.serverTickLength + "}");
             return;
         }
         if (r.cmd.equals("dim")) {
@@ -4613,6 +4674,165 @@ sb.append("}");
             return;
         }
 
+        if (r.cmd.equals("pvp_setup")) {
+            final net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+            if (server == null) { reply(r, err("no integrated world")); return; }
+            final String name0 = r.action.has("role0")
+                ? r.action.get("role0").getAsString() : "Player0";
+            final String name1 = r.action.has("role1")
+                ? r.action.get("role1").getAsString() : "Player1";
+            final double lateral0 = r.action.has("lateral0")
+                ? Math.max(-3.0, Math.min(3.0, r.action.get("lateral0").getAsDouble())) : 0.0;
+            final double lateral1 = r.action.has("lateral1")
+                ? Math.max(-3.0, Math.min(3.0, r.action.get("lateral1").getAsDouble())) : 0.0;
+            final float yawDelta0 = r.action.has("yaw_delta0")
+                ? Math.max(-45.0F, Math.min(45.0F, r.action.get("yaw_delta0").getAsFloat())) : 0.0F;
+            final float yawDelta1 = r.action.has("yaw_delta1")
+                ? Math.max(-45.0F, Math.min(45.0F, r.action.get("yaw_delta1").getAsFloat())) : 0.0F;
+            final Req setupReq = r;
+            server.addScheduledTask(new Runnable() { public void run() {
+                try {
+                    net.minecraft.entity.player.EntityPlayerMP p0 =
+                        server.getPlayerList().getPlayerByUsername(name0);
+                    net.minecraft.entity.player.EntityPlayerMP p1 =
+                        server.getPlayerList().getPlayerByUsername(name1);
+                    if (p0 == null || p1 == null) {
+                        reply(setupReq, err("both configured PvP roles must be connected"));
+                        return;
+                    }
+                    net.minecraft.world.WorldServer w = p0.getServerWorld();
+                    w.getGameRules().setOrCreateGameRule("doMobSpawning", "false");
+                    w.getGameRules().setOrCreateGameRule("doDaylightCycle", "false");
+                    w.getGameRules().setOrCreateGameRule("naturalRegeneration", "false");
+                    w.getGameRules().setOrCreateGameRule("keepInventory", "true");
+                    java.util.ArrayList<Entity> entities =
+                        new java.util.ArrayList<Entity>(w.loadedEntityList);
+                    for (Entity e : entities)
+                        if (!(e instanceof net.minecraft.entity.player.EntityPlayer)) e.setDead();
+                    net.minecraft.block.state.IBlockState stone =
+                        net.minecraft.init.Blocks.STONE.getDefaultState();
+                    net.minecraft.block.state.IBlockState air =
+                        net.minecraft.init.Blocks.AIR.getDefaultState();
+                    for (int x = -16; x < 16; ++x)
+                        for (int z = -16; z < 16; ++z) {
+                            w.setBlockState(new BlockPos(x, 64, z), stone, 2);
+                            for (int y = 65; y <= 70; ++y)
+                                w.setBlockState(new BlockPos(x, y, z), air, 2);
+                        }
+                    // The CUDA arena clamps at +/-16. A wall immediately outside
+                    // the same 32x32 playable floor is the vanilla collision oracle
+                    // equivalent and prevents a transferred policy falling into void.
+                    for (int i = -17; i <= 16; ++i)
+                        for (int y = 65; y <= 68; ++y) {
+                            w.setBlockState(new BlockPos(-17, y, i), stone, 2);
+                            w.setBlockState(new BlockPos(16, y, i), stone, 2);
+                            w.setBlockState(new BlockPos(i, y, -17), stone, 2);
+                            w.setBlockState(new BlockPos(i, y, 16), stone, 2);
+                        }
+                    pvpResetPlayer(p0, -4.0, 65.0, lateral0, -90.0F + yawDelta0);
+                    pvpResetPlayer(p1,  4.0, 65.0, lateral1,  90.0F + yawDelta1);
+                    reply(setupReq, "{\"ok\":true,\"arena\":\"stone32\""
+                        + ",\"lateral0\":" + lateral0 + ",\"lateral1\":" + lateral1
+                        + ",\"yaw_delta0\":" + yawDelta0
+                        + ",\"yaw_delta1\":" + yawDelta1 + "}");
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    reply(setupReq, err("pvp setup: " + t));
+                }
+            }});
+            return;
+        }
+        if (r.cmd.equals("pvp_attack")) {
+            final net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+            if (server == null) { reply(r, err("no integrated world")); return; }
+            final String name0 = r.action.has("role0")
+                ? r.action.get("role0").getAsString() : "Player0";
+            final String name1 = r.action.has("role1")
+                ? r.action.get("role1").getAsString() : "Player1";
+            final int attackerRole = r.action.has("role")
+                ? r.action.get("role").getAsInt() : 0;
+            final Req attackReq = r;
+            server.addScheduledTask(new Runnable() { public void run() {
+                try {
+                    net.minecraft.entity.player.EntityPlayerMP attacker =
+                        server.getPlayerList().getPlayerByUsername(attackerRole == 0 ? name0 : name1);
+                    net.minecraft.entity.player.EntityPlayerMP target =
+                        server.getPlayerList().getPlayerByUsername(attackerRole == 0 ? name1 : name0);
+                    if (attacker == null || target == null)
+                        throw new IllegalStateException("both PvP roles must be connected");
+                    float before = target.getHealth();
+                    attacker.connection.processUseEntity(
+                        new net.minecraft.network.play.client.CPacketUseEntity(target));
+                    JsonObject out = new JsonObject();
+                    out.addProperty("ok", true);
+                    out.addProperty("role", attackerRole);
+                    out.addProperty("target_role", 1 - attackerRole);
+                    out.addProperty("health_before_bits", Float.floatToRawIntBits(before));
+                    out.addProperty("health_after_bits", Float.floatToRawIntBits(target.getHealth()));
+                    out.addProperty("accepted", target.getHealth() < before);
+                    reply(attackReq, out.toString());
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    reply(attackReq, err("pvp attack: " + t));
+                }
+            }});
+            return;
+        }
+        if (r.cmd.equals("pvp_state")) {
+            final net.minecraft.server.MinecraftServer server = mc.getIntegratedServer();
+            if (server == null) { reply(r, err("no integrated world")); return; }
+            final String name0 = r.action.has("role0")
+                ? r.action.get("role0").getAsString() : "Player0";
+            final String name1 = r.action.has("role1")
+                ? r.action.get("role1").getAsString() : "Player1";
+            final Req stateReq = r;
+            server.addScheduledTask(new Runnable() { public void run() {
+                try {
+                    JsonObject out = new JsonObject();
+                    out.addProperty("ok", true);
+                    out.addProperty("server_tick", TimeHelper.SyncManager.numTicks);
+                    JsonArray players = new JsonArray();
+                    players.add(pvpPlayerState(server.getPlayerList().getPlayerByUsername(name0), 0));
+                    players.add(pvpPlayerState(server.getPlayerList().getPlayerByUsername(name1), 1));
+                    out.add("players", players);
+                    reply(stateReq, out.toString());
+                } catch (Throwable t) {
+                    t.printStackTrace();
+                    reply(stateReq, err("pvp state: " + t));
+                }
+            }});
+            return;
+        }
+        if (r.cmd.equals("open_lan")) {
+            net.minecraft.server.integrated.IntegratedServer server = mc.getIntegratedServer();
+            if (server == null || mc.player == null) {
+                reply(r, err("no integrated world"));
+                return;
+            }
+            // Development clients use pinned offline profiles; LAN authentication
+            // would reject the second role with "Invalid session" before Forge's
+            // handshake. This server binds only to the user's private test host.
+            server.setOnlineMode(false);
+            String port = server.shareToLAN(GameType.SURVIVAL, true);
+            if (port == null) reply(r, err("open LAN failed"));
+            else reply(r, "{\"ok\":true,\"port\":" + port + "}");
+            return;
+        }
+        if (r.cmd.equals("connect")) {
+            if (!r.action.has("address")) {
+                reply(r, err("connect requires address"));
+                return;
+            }
+            String address = r.action.get("address").getAsString();
+            net.minecraft.client.gui.GuiScreen parent = mc.currentScreen != null
+                ? mc.currentScreen : new net.minecraft.client.gui.GuiMainMenu();
+            net.minecraft.client.multiplayer.ServerData data =
+                new net.minecraft.client.multiplayer.ServerData("Netherite PvP", address, false);
+            mc.displayGuiScreen(new net.minecraft.client.multiplayer.GuiConnecting(parent, mc, data));
+            reply(r, "{\"ok\":true,\"address\":\"" + address.replace("\"", "") + "\"}");
+            return;
+        }
+
         // reset handles the no-world case by launching a world headlessly (async)
         if (r.cmd.equals("reset")) {
             // "fresh": true forces a brand-new world at the requested seed: tear down the
@@ -4768,6 +4988,7 @@ sb.append("}");
         r.applied = true;
         inFlight = r;
         } catch (Throwable t) {
+            t.printStackTrace();
             r.resp.offer(err("command failed: " + t));
         }
     }
@@ -4802,6 +5023,21 @@ sb.append("}");
         if (a.has("dyaw")) p.rotationYaw += a.get("dyaw").getAsFloat();
         if (a.has("dpitch"))
             p.rotationPitch = clamp(p.rotationPitch + a.get("dpitch").getAsFloat(), -90, 90);
+        // Realtime PvP deployment needs one complete vanilla left-click attempt
+        // in this client tick.  Merely holding KeyBinding from ClientTick.END
+        // does not increment its press counter, so it never reaches clickMouse().
+        // Refresh the crosshair after the policy's look delta, then use the same
+        // PlayerControllerMP path as clickMouse (raycast reach and server packet).
+        if (a.has("attack_once") && a.get("attack_once").getAsInt() != 0
+                && mc.playerController != null && mc.entityRenderer != null) {
+            mc.entityRenderer.getMouseOver(1.0F);
+            RayTraceResult hit = mc.objectMouseOver;
+            if (hit != null && hit.typeOfHit == RayTraceResult.Type.ENTITY
+                    && hit.entityHit != null) {
+                mc.playerController.attackEntity(p, hit.entityHit);
+                p.swingArm(net.minecraft.util.EnumHand.MAIN_HAND);
+            }
+        }
         // Semantic camera request: obs after THIS step includes cam/depth/edge
         // + the coal list. Off by default (the raycast is the obs cost).
         rlCamPending = a.has("cam") && a.get("cam").getAsInt() != 0;

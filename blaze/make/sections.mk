@@ -39,7 +39,7 @@ PLAYER := player_survival player_vitals player_death player_break
 # UNIFIED: emptied by trail purge
 UNIFIED :=
 
-COMBAT := combat_math projectile_motion explosion
+COMBAT := combat_math projectile_motion explosion pvp_arena
 
 ITEMS := items_core items_tools_armor item_block_place inventory_stack_rules \
 	crafting_recipes crafting_recipes_full smelting_recipes tile_entity_furnace \

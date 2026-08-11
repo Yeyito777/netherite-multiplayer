@@ -1,0 +1,105 @@
+{
+  "baseline": "artifacts/pilots/pilot10/evaluation.json",
+  "candidate": "artifacts/pilots/pilot13/evaluation.json",
+  "checks": [
+    {
+      "actual": 1.0,
+      "limit": 0.95,
+      "name": "greedy: fight completion",
+      "passed": true,
+      "relation": ">="
+    },
+    {
+      "actual": 2.033365161313364,
+      "limit": 50.993017774480734,
+      "name": "greedy: bearing error",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.0,
+      "limit": 0.01,
+      "name": "greedy: forward while behind (all player steps)",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.18311473425077687,
+      "limit": 0.2,
+      "name": "greedy: near-wall occupancy",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 12.3046875,
+      "limit": 19.650847244262696,
+      "name": "greedy: ticks to first hit",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 483.96484375,
+      "limit": 1189.7875000000001,
+      "name": "greedy: ticks to death",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.20703125,
+      "limit": 0.25,
+      "name": "greedy: role win imbalance",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 1.0,
+      "limit": 0.95,
+      "name": "sampled: fight completion",
+      "passed": true,
+      "relation": ">="
+    },
+    {
+      "actual": 2.3397590977739453,
+      "limit": 55.47852253959506,
+      "name": "sampled: bearing error",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.0,
+      "limit": 0.18336325031081063,
+      "name": "sampled: forward while behind (all player steps)",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.1392915934376168,
+      "limit": 0.2,
+      "name": "sampled: near-wall occupancy",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 16.09375,
+      "limit": 35.1470947265625,
+      "name": "sampled: ticks to first hit",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 491.19921875,
+      "limit": 1230.4015625000002,
+      "name": "sampled: ticks to death",
+      "passed": true,
+      "relation": "<="
+    },
+    {
+      "actual": 0.01953125,
+      "limit": 0.15,
+      "name": "sampled: role win imbalance",
+      "passed": true,
+      "relation": "<="
+    }
+  ],
+  "passed": true
+}

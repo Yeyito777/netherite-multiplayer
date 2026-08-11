@@ -1,5 +1,6 @@
 # regenerable gradle / game caches (kept on disk for fast runs, never tracked)
 java/Minecraft/run/
+java/Minecraft/run-*/
 java/Minecraft/build/
 java/Minecraft/.gradle/
 java/Minecraft/.minecraft/
@@ -39,6 +40,19 @@ verify/mc_capture/magma_frame.png
 *.log
 frame*.png
 *.npy
+*.mp4
+*.webm
+
+# local credentials and machine-specific configuration
+.env
+.env.*
+!.env.example
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+secrets/
+.secrets/
 
 # python
 .venv/

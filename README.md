@@ -1,7 +1,45 @@
-# netherite
+# Netherite Multiplayer
 
-From-scratch C/CUDA Minecraft **1.11.2** (bit-verified vs the real Java game) +
-batched CUDA RL.
+High-throughput Minecraft **1.11.2** simulation in C/CUDA, extended with
+deterministic two-player shared worlds, adversarial self-play, and deployment of
+the trained policies into real Forge clients.
+
+This project builds on [Infatoshi/netherite](https://github.com/Infatoshi/netherite).
+Our main branch adds a fixed two-player PvP environment, CPU/CUDA parity tests,
+20 Hz fine-control policies, training and evaluation tooling, and a private
+real-Minecraft deployment bridge.
+
+## Boxing MVP
+
+- 32x32 stone arena, two unarmored players, fist combat only.
+- Two independent feed-forward actor-critic policies trained with behavioral
+  cloning, PPO, and adversarial self-play.
+- Batched CPU and CUDA backends with deterministic shared-state combat.
+- Nine-value fine yaw control at one policy decision per Minecraft tick.
+- Frozen Pilot 13 checkpoint: 52.43 million self-play decisions, 2.04 million
+  hits, and 46,754 kills during its accepted training run.
+- Real Minecraft 1.11.2 deployment at 19.7 measured decisions/second while
+  recording both clients.
+
+Start with [`docs/MULTIPLAYER_MVP.md`](docs/MULTIPLAYER_MVP.md),
+[`PVP_SKILL_REPORT.md`](PVP_SKILL_REPORT.md), and
+[`artifacts/pilots/pilot13/README.md`](artifacts/pilots/pilot13/README.md).
+
+## Monorepo map
+
+| Path | Purpose |
+|---|---|
+| `blaze/pvp/` | Two-player C/CUDA simulator, Python wrapper, trainer, evaluator, and parity tests |
+| `java/Minecraft/` | Forge 1.11.2 oracle/mod and dual-client bridge |
+| `java/deploy_pvp_checkpoint.py` | Closed-loop policy deployment into two real clients |
+| `verify/trace/` | Deterministic scheduler and trace-contract tests |
+| `artifacts/pilots/pilot13/` | Accepted frozen checkpoints, metrics, plots, and evaluations |
+| `artifacts/fights/` | Compact real-deployment receipts; generated videos are stored externally |
+
+## Upstream Netherite
+
+The underlying project is a from-scratch C/CUDA Minecraft 1.11.2 implementation
+(bit-verified against the Java game) with batched CUDA RL:
 
 <p align="center">
   <img src="docs/assets/zoom_farm.gif" width="800"
@@ -14,11 +52,18 @@ worlds stepping in lockstep on one GPU (recorded from a real batch).</i></p>
 
 | | Support |
 |--|---------|
-| **Linux x86_64** | Full stack (build, CUDA train, Java oracle). Canonical: anvil. |
+| **Linux x86_64** | Full stack (build, CUDA train, Java oracle). |
 | **macOS** | Viewer / SSH only (Moonlight, mcwindow). No native game or CUDA train. |
 | **Windows** | Not supported as a build host. |
 
 No Mojang content is shipped. You need a legal Minecraft ownership and JDK 8.
+
+## License
+
+The multiplayer/PvP additions authored in this repository are available under
+the MIT License. Pre-existing Netherite, Forge, Malmo, Minecraft, and third-party
+components retain their own copyright and license status. See [`LICENSE`](LICENSE)
+and [`NOTICE.md`](NOTICE.md); the root MIT grant does not relicense upstream code.
 
 ## Using an LLM on this repo
 

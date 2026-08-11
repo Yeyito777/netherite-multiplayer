@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "players": [
+    {
+      "absorption_bits": 0,
+      "attack_cooldown_bits": 1065353216,
+      "dead": false,
+      "entity_id": 0,
+      "food": 20,
+      "health_bits": 1101004800,
+      "hurt_resistant_time": 0,
+      "motion_bits": [
+        0,
+        -4633058300709086167,
+        0
+      ],
+      "name": "Player0",
+      "on_ground": true,
+      "position_bits": [
+        -4607182418800017408,
+        4634274385308418048,
+        0
+      ],
+      "role": 0,
+      "rotation_bits": [
+        -1028390912,
+        0
+      ],
+      "saturation_bits": 1084227584,
+      "sneaking": false,
+      "sprinting": false,
+      "uuid": "2654e3c3-150d-3857-a426-0b141796a4e0"
+    },
+    {
+      "absorption_bits": 0,
+      "attack_cooldown_bits": 1065353216,
+      "dead": false,
+      "entity_id": 385657,
+      "food": 20,
+      "health_bits": 1101004800,
+      "hurt_resistant_time": 0,
+      "motion_bits": [
+        0,
+        -4633058300709086167,
+        0
+      ],
+      "name": "Player1",
+      "on_ground": true,
+      "position_bits": [
+        4616189618054758400,
+        4634274385308418048,
+        0
+      ],
+      "role": 1,
+      "rotation_bits": [
+        1119092736,
+        0
+      ],
+      "saturation_bits": 1084227584,
+      "sneaking": false,
+      "sprinting": false,
+      "uuid": "681f539b-8bb8-3f85-85e5-a2945f6c6539"
+    }
+  ],
+  "server_tick": 2585
+}

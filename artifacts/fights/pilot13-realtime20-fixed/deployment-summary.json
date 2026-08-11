@@ -1,0 +1,1 @@
+{"action_schema": "fine_yaw_20hz_v2", "control_hz": 20, "damage0": 20.0, "damage1": 20.0, "deaths0": 1, "deaths1": 0, "decisions": 390, "deployment_path": "realtime_client", "hits0": 20, "hits1": 21, "measured_decisions_per_second": 19.710429534905366, "ok": true, "receipt": "artifacts/fights/pilot13-realtime20-fixed/match.jsonl", "wall_seconds": 19.786478996276855}

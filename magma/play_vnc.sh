@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Play magma_game over VNC on anvil (headless). Starts Xvfb :1 + openbox + x11vnc
-# (localhost:5900, pw redstone) and launches the C game on that display. From the Mac:
-#   ssh -f -N -L 5901:localhost:5900 anvil   then   open vnc://localhost:5901
+# (localhost:5900) and launches the C game on that display. Tunnel port 5900
+# from the host before connecting.
 # Controls: WASD move, mouse look, space jump, shift sneak, left-click break,
 #   right-click place, 1-9 / wheel hotbar, ESC quits.
 #
@@ -12,7 +12,8 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export DISPLAY=:1
-VNCPW="redstone"
+: "${VNC_PASSWORD:?Set VNC_PASSWORD (VNC uses at most the first 8 characters)}"
+VNCPW="$VNC_PASSWORD"
 W=1280; H=720
 RADIUS="${MAGMA_VIEW_RADIUS:-6}"
 
@@ -32,7 +33,7 @@ nohup x11vnc -display :1 -rfbauth "$HOME/.vnc/passwd" -localhost -forever -share
       -rfbport 5900 -noxdamage > "$DIR/x11vnc.log" 2>&1 &
 sleep 1
 
-echo "STARTED display=:1 vncport=5900 pw=$VNCPW view_radius=$RADIUS"
-echo "  Mac: ssh -f -N -L 5901:localhost:5900 anvil ; open vnc://localhost:5901"
+echo "STARTED display=:1 vncport=5900 view_radius=$RADIUS"
+echo "  Tunnel localhost:5900 from this host before opening a VNC client."
 echo "=== launching magma_game (ESC to quit) ==="
 exec "$DIR/magma_game" --seed 0 --w "$W" --h "$H" --view-distance "$RADIUS"

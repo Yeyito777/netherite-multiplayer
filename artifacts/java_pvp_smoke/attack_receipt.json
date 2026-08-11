@@ -1,0 +1,151 @@
+{
+  "after": {
+    "ok": true,
+    "players": [
+      {
+        "absorption_bits": 0,
+        "attack_cooldown_bits": 1045220557,
+        "dead": false,
+        "entity_id": 0,
+        "food": 20,
+        "health_bits": 1101004800,
+        "hurt_resistant_time": 0,
+        "motion_bits": [
+          0,
+          -4633058300709086167,
+          0
+        ],
+        "name": "Player0",
+        "on_ground": true,
+        "position_bits": [
+          -4620693217682128896,
+          4634274385308418048,
+          4602678819172646912
+        ],
+        "role": 0,
+        "rotation_bits": [
+          -1028390912,
+          0
+        ],
+        "saturation_bits": 1084227584,
+        "sneaking": false,
+        "sprinting": false,
+        "uuid": "2654e3c3-150d-3857-a426-0b141796a4e0"
+      },
+      {
+        "absorption_bits": 0,
+        "attack_cooldown_bits": 1065353216,
+        "dead": false,
+        "entity_id": 392330,
+        "food": 20,
+        "health_bits": 1100480512,
+        "hurt_resistant_time": 19,
+        "motion_bits": [
+          0,
+          4601237667055665152,
+          0
+        ],
+        "name": "Player1",
+        "on_ground": false,
+        "position_bits": [
+          4611235658464650854,
+          4634299770832880140,
+          4602678819172646912
+        ],
+        "role": 1,
+        "rotation_bits": [
+          1119092736,
+          0
+        ],
+        "saturation_bits": 1084227584,
+        "sneaking": false,
+        "sprinting": false,
+        "uuid": "681f539b-8bb8-3f85-85e5-a2945f6c6539"
+      }
+    ],
+    "server_tick": 2326
+  },
+  "attack": {
+    "accepted": true,
+    "health_after_bits": 1100480512,
+    "health_before_bits": 1101004800,
+    "ok": true,
+    "role": 0,
+    "target_role": 1
+  },
+  "before": {
+    "ok": true,
+    "players": [
+      {
+        "absorption_bits": 0,
+        "attack_cooldown_bits": 1065353216,
+        "dead": false,
+        "entity_id": 0,
+        "food": 20,
+        "health_bits": 1101004800,
+        "hurt_resistant_time": 0,
+        "motion_bits": [
+          0,
+          -4633058300709086167,
+          0
+        ],
+        "name": "Player0",
+        "on_ground": true,
+        "position_bits": [
+          -4620693217682128896,
+          4634274385308418048,
+          4602678819172646912
+        ],
+        "role": 0,
+        "rotation_bits": [
+          -1028390912,
+          0
+        ],
+        "saturation_bits": 1084227584,
+        "sneaking": false,
+        "sprinting": false,
+        "uuid": "2654e3c3-150d-3857-a426-0b141796a4e0"
+      },
+      {
+        "absorption_bits": 0,
+        "attack_cooldown_bits": 1065353216,
+        "dead": false,
+        "entity_id": 392330,
+        "food": 20,
+        "health_bits": 1101004800,
+        "hurt_resistant_time": 0,
+        "motion_bits": [
+          0,
+          -4633058300709086167,
+          0
+        ],
+        "name": "Player1",
+        "on_ground": true,
+        "position_bits": [
+          4609434218613702656,
+          4634274385308418048,
+          4602678819172646912
+        ],
+        "role": 1,
+        "rotation_bits": [
+          1119092736,
+          0
+        ],
+        "saturation_bits": 1084227584,
+        "sneaking": false,
+        "sprinting": false,
+        "uuid": "681f539b-8bb8-3f85-85e5-a2945f6c6539"
+      }
+    ],
+    "server_tick": 2324
+  },
+  "setup": {
+    "arena": "stone32",
+    "ok": true
+  },
+  "teleport": {
+    "failed": 0,
+    "ok": true,
+    "ran": 2
+  }
+}

@@ -1,7 +1,7 @@
 # netherite
 
-Home: Anvil-primary - `anvil:~/dev/netherite`. Build/run here; Mac is control
-plane / Moonlight only.
+Canonical development is the repository's `main` branch. The full build and
+training stack targets Linux x86_64; see `AGENTS.md` for host requirements.
 
 **Agent entry is `AGENTS.md`.** Read that first. This file exists so Claude Code
 auto-load has a project file; it does not duplicate the full map.
@@ -23,5 +23,5 @@ worktree add` cannot build or replay - tapes and generated headers are
 gitignored), and read AGENTS.md "Pixel investigation" for the two ways a
 parallel measurement lies.
 
-Anvil is headless: demos scp to Mac; human play via Moonlight or mcwindow;
-agent stack is Xvfb `:1` (`java/start_vnc_client.sh`). One qrl port 25575 owner.
+Headless play can use Moonlight, mcwindow, or Xvfb (`java/start_vnc_client.sh`).
+Only one process may own qrl port 25575.

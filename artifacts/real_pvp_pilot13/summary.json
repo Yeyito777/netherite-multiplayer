@@ -1,0 +1,37 @@
+{
+  "action_schema": "fine_yaw_20hz_v2",
+  "checkpoint": "artifacts/pilots/pilot13/selfplay.pt",
+  "matches": [
+    {
+      "damage": [
+        20.0,
+        18.5
+      ],
+      "decisions": 106,
+      "hits": [
+        19,
+        18
+      ],
+      "killed_role": 1,
+      "receipt": "match1-first-fight.jsonl",
+      "setup_seed": 130013,
+      "winner_role": 0
+    },
+    {
+      "damage": [
+        20.0,
+        19.0
+      ],
+      "decisions": 106,
+      "hits": [
+        21,
+        19
+      ],
+      "killed_role": 1,
+      "receipt": "match-recorded.jsonl",
+      "server_ticks": 391,
+      "setup_seed": 130015,
+      "winner_role": 0
+    }
+  ]
+}
