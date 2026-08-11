@@ -16,7 +16,7 @@ from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, FINE_ACTION_SCHEMA, Policy
 
 @torch.no_grad()
 def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
-        swap_policies=False):
+        swap_policies=False, deterministic_yaw=False):
     torch.manual_seed(seed)
     device = torch.device("cpu")
     policies = [Policy(action_schema=action_schema).eval(),
@@ -47,7 +47,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         for role in range(2):
             actor, _ = policies[role](obs[:, role])
             if stochastic:
-                action, _, _ = sample_actions(actor, action_schema)
+                action, _, _ = sample_actions(
+                    actor, action_schema, deterministic_yaw=deterministic_yaw)
             else:
                 action = greedy_actions(actor, action_schema)
             actions.append(action)
@@ -126,7 +127,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
     behind_steps = max(1, pursuit["behind"])
     observed_first_hits = first_hit[first_hit >= 0]
     return {
-        "mode": "sampled" if stochastic else "greedy",
+        "mode": ("hybrid" if stochastic and deterministic_yaw else
+                 "sampled" if stochastic else "greedy"),
         "policy_assignment": "swapped" if swap_policies else "native",
         "action_schema": action_schema,
         "episodes": episodes, "horizon_decisions": horizon, "repeat": repeat,
@@ -193,6 +195,14 @@ def main():
         result["sampled_swapped"] = run(
             ck, args.episodes, args.horizon, repeat, True, args.seed,
             action_schema, swap_policies=True)
+    if action_schema == CONTINUOUS_ACTION_SCHEMA:
+        result["hybrid"] = run(
+            ck, args.episodes, args.horizon, repeat, True, args.seed,
+            action_schema, deterministic_yaw=True)
+        if args.include_role_swapped:
+            result["hybrid_swapped"] = run(
+                ck, args.episodes, args.horizon, repeat, True, args.seed,
+                action_schema, swap_policies=True, deterministic_yaw=True)
     text = json.dumps(result, indent=2, sort_keys=True)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

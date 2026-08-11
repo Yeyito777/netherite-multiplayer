@@ -612,6 +612,10 @@ def main():
                 rows[:, 1] = scripted_baseline(
                     obs[:, 1], device, attack=True,
                     action_schema=cfg["action_schema"])
+            # VecPvp reuses its observation output buffer. Preserve the state
+            # that produced this action *before* env.step overwrites that buffer;
+            # pairing actions/log-probs with the next state creates a fake PPO KL.
+            decision_obs = obs.clone()
             next_obs, reward, done, hits, damage = env.step(rows, repeat=cfg["repeat"])
             next_obs = env_tensor(next_obs, device)
             reward = env_tensor(reward, device)
@@ -625,9 +629,8 @@ def main():
             done_t = env_tensor(done, device).bool()
             hits_t = env_tensor(hits, device)
             damage_t = env_tensor(damage, device)
-            # VecPvp reuses output buffers. Clone rollout data before the next
-            # native step overwrites obs/reward/done in place.
-            ob.append(obs.clone()); ac.append(action); lp.append(logp); va.append(value)
+            # Reward/done buffers must likewise be copied before the next step.
+            ob.append(decision_obs); ac.append(action); lp.append(logp); va.append(value)
             rw.append(train_reward)
             dn.append(done_t[:, None].expand(-1, 2).clone())
             chunk_hits += hits_t.sum(0)
@@ -669,6 +672,13 @@ def main():
         losses = {}
         total = bobs.shape[0]
         train_roles = (0,) if chunk < cfg["bootstrap_chaser"] else (0, 1)
+        with torch.no_grad():
+            for role in train_roles:
+                replay_actor, _ = policies[role](bobs[:, role])
+                replay_logp, _ = evaluate_actions(
+                    replay_actor, bact[:, role], cfg["action_schema"])
+                losses[f"rollout_logp_replay_max_role{role}"] = float(
+                    (replay_logp - blogp[:, role]).abs().max())
         for role in train_roles:
             adv = badv[:, role]
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
