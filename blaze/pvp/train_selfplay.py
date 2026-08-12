@@ -734,6 +734,7 @@ def main():
         "extra_repeat_prob": float(os.environ.get("PVP_EXTRA_REPEAT_PROB", "0")),
         "bc_steps": int(os.environ.get("PVP_BC_STEPS", "64")),
         "bc_epochs": int(os.environ.get("PVP_BC_EPOCHS", "4")),
+        "clone_after_bc": bool(int(os.environ.get("PVP_CLONE_AFTER_BC", "0"))),
         "bc_perturb": float(os.environ.get(
             "PVP_BC_PERTURB", "0.25" if action_schema in
             (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
@@ -815,7 +816,7 @@ def main():
     obs, bc_metrics = behavior_clone(
         policies[0], env, obs, seeds, device, cfg["bc_steps"], cfg["bc_epochs"],
         cfg["minibatch"], cfg["action_schema"], cfg["repeat"], cfg["bc_perturb"])
-    if not resume_same_schema:
+    if not resume_same_schema or cfg["clone_after_bc"]:
         policies[1].load_state_dict(policies[0].state_dict())
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
                   for p in policies]
