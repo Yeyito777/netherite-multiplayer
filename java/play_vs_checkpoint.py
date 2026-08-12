@@ -50,6 +50,10 @@ def main():
                         default=ROOT / "artifacts/pilots/pilot20/selfplay.pt")
     parser.add_argument("--model-role", type=int, choices=(0, 1), default=0,
                         help="which trained adversary controls Player1")
+    parser.add_argument("--human-name", default="Player0",
+                        help="server profile name controlled by the human client")
+    parser.add_argument("--ai-name", default="Player1",
+                        help="server profile name controlled by the policy client")
     parser.add_argument("--setup-seed", type=int, default=20260811)
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--max-seconds", type=float, default=600.0)
@@ -69,6 +73,7 @@ def main():
     # only creates/resets the arena and fixed iron loadout.
     bridge(25575, {"cmd": "overclock", "action": {"ms": 50}})
     bridge(25575, {"cmd": "pvp_setup", "action": {
+        "role0": args.human_name, "role1": args.ai_name,
         "lateral0": 0.0, "lateral1": 0.0,
         "yaw_delta0": 0.0, "yaw_delta1": 0.0,
     }})

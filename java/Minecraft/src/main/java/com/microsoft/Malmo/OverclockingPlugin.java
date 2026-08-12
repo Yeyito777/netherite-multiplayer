@@ -35,10 +35,20 @@ import java.util.Map;
 
 public class OverclockingPlugin implements IFMLLoadingPlugin
 {
+    /**
+     * A normal user-controlled Prism client needs the qrl Forge mod and its
+     * access transformer, but not Malmo's deterministic game-loop rewrites.
+     * Keeping the core plugin loaded makes Forge apply malmomod_at.cfg early;
+     * this switch only suppresses the overclock transformer/mixin suite.
+     */
+    private static final boolean BRIDGE_ONLY = Boolean.getBoolean("netherite.bridgeOnly");
+
     public OverclockingPlugin() { 
-        // Add mixins.
-        MixinBootstrap.init();
-        Mixins.addConfiguration("mixins.overclocking.malmomod.json");
+        if (!BRIDGE_ONLY) {
+            // Add deterministic simulator/oracle mixins for development clients.
+            MixinBootstrap.init();
+            Mixins.addConfiguration("mixins.overclocking.malmomod.json");
+        }
 
         CodeSource codeSource = getClass().getProtectionDomain().getCodeSource();
         if (codeSource != null) {
@@ -63,6 +73,7 @@ public class OverclockingPlugin implements IFMLLoadingPlugin
     @Override
     public String[] getASMTransformerClass()
     {
+        if (BRIDGE_ONLY) return new String[] {};
         return new String[]{"com.microsoft.Malmo.OverclockingClassTransformer"};
         // return new String[] {};
     }
