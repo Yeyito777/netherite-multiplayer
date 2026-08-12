@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "blaze" / "pvp"))
 from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
                             FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA, FWD, PITCH,
                             PITCH_LIMIT, STRAFE, YAW, YAW_FINE, YAW_LIMIT, Policy,
-                            V2_ACTION_SCHEMA,
+                            V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             checkpoint_action_schema, is_continuous_schema,
                             policy_input)
 
@@ -150,6 +150,26 @@ def observation(players, role, legacy=False):
     ], dtype=np.float32)
 
 
+class PolicyObservationHistory:
+    """Four delivered frames plus the acting client's own current RTT."""
+    def __init__(self, players, rows):
+        self.frames = []
+        for role in range(2):
+            first = observation(players, role)
+            self.frames.append([first.copy() for _ in range(4)])
+        self.ping_ms = [float(row.get("ping_ms", 0.0)) for row in rows]
+
+    def encode(self, role):
+        return np.concatenate(self.frames[role] + [
+            np.asarray([self.ping_ms[role] / 200.0], dtype=np.float32)])
+
+    def update(self, players, rows):
+        for role in range(2):
+            current = observation(players, role)
+            self.frames[role] = [current] + self.frames[role][:3]
+            self.ping_ms[role] = float(rows[role].get("ping_ms", self.ping_ms[role]))
+
+
 @torch.no_grad()
 def policy_action(policy, obs, stochastic=False,
                   action_schema=LEGACY_ACTION_SCHEMA,
@@ -169,13 +189,14 @@ def policy_action(policy, obs, stochastic=False,
             yaw_latent = torch.distributions.Normal(yaw_latent, std).sample()
         yaw = float(YAW_LIMIT * torch.tanh(yaw_latent)[0])
         pitch = 0.0
-        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
+        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                              V21_ACTION_SCHEMA):
             pitch_latent = actor["pitch_mean"]
             if sample_continuous_pitch:
                 std = actor["pitch_log_std"].clamp(-4.0, 0.0).exp()
                 pitch_latent = torch.distributions.Normal(pitch_latent, std).sample()
             pitch = float(PITCH_LIMIT * torch.tanh(pitch_latent)[0])
-        if action_schema == V2_ACTION_SCHEMA:
+        if action_schema in (V2_ACTION_SCHEMA, V21_ACTION_SCHEMA):
             combat = indices[5]
             return [FWD[indices[0]], STRAFE[indices[1]], yaw, pitch,
                     float(indices[2]), float(indices[3]), float(combat == 1),
@@ -372,7 +393,8 @@ def main():
     repeat_seconds = (args.repeat_seconds if args.repeat_seconds is not None else
                       (0.0 if action_schema in
                        (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-                        CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else 0.2))
+                        CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                        V21_ACTION_SCHEMA) else 0.2))
     policies = [Policy(action_schema=action_schema).eval(),
                 Policy(action_schema=action_schema).eval()]
     for role in range(2):
@@ -422,9 +444,12 @@ def main():
                 time.sleep(0.005)
         started = time.time()
         client_players = None
+        policy_history = None
         persistent = None
         if args.realtime_client_path:
             client_players = [decode_client_player(row) for row in visible_rows]
+            if action_schema == V21_ACTION_SCHEMA:
+                policy_history = PolicyObservationHistory(client_players, visible_rows)
             persistent = [PersistentBridge(25575 + role) for role in range(2)]
         try:
           for decision in range(args.decisions):
@@ -432,7 +457,9 @@ def main():
                 decision_started_ns = time.monotonic_ns()
                 players = client_players
                 raw = [policy_action(
-                           policies[r], observation(players, r, legacy=legacy_observation),
+                           policies[r], (policy_history.encode(r)
+                                         if policy_history is not None else
+                                         observation(players, r, legacy=legacy_observation)),
                            args.stochastic, action_schema,
                            args.sample_continuous_yaw,
                            args.sample_continuous_pitch)
@@ -443,6 +470,8 @@ def main():
                            for r in range(2)]
                 results = [f.result() for f in futures]
                 next_players = [decode_client_player(result[0]) for result in results]
+                if policy_history is not None:
+                    policy_history.update(next_players, [result[0] for result in results])
                 client_timing = []
                 for role, (raw_obs, transport) in enumerate(results):
                     client_timing.append({**transport,

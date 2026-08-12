@@ -6428,6 +6428,13 @@ sb.append("}");
                       Long.toUnsignedString(rlPolicyActionFnv, 16));
         o.addProperty("client_tick", rlClientTick);
         o.addProperty("player_tick", p.ticksExisted);
+        // The latency-aware policy receives only this client's server-list RTT.
+        // Never expose another player's response time through the observation.
+        try {
+            net.minecraft.client.network.NetworkPlayerInfo info =
+                mc.getConnection().getPlayerInfo(p.getUniqueID());
+            o.addProperty("ping_ms", info == null ? 0 : info.getResponseTime());
+        } catch (Throwable ignored) { o.addProperty("ping_ms", 0); }
         o.addProperty("action_apply_client_tick", rlLastActionClientTick);
         o.addProperty("action_apply_world_tick", rlLastActionWorldTick);
         o.addProperty("action_apply_nano_time", rlLastActionNanoTime);

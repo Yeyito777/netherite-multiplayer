@@ -19,7 +19,7 @@ from torch.distributions import Categorical, Normal
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from pvp import N_ACT, VecPvp
+from pvp import N_ACT, N_NETWORK_OBS, NetworkVecPvp, VecPvp
 
 HEADS = (3, 3, 3, 3, 2, 2, 2)
 CONTINUOUS_HEADS = (3, 3, 2, 2, 2)
@@ -36,26 +36,34 @@ FINE_ACTION_SCHEMA = "fine_yaw_20hz_v2"
 CONTINUOUS_ACTION_SCHEMA = "continuous_yaw_20hz_v3"
 CONTINUOUS_LOOK_ACTION_SCHEMA = "continuous_look_20hz_v4"
 V2_ACTION_SCHEMA = "iron_gear_20hz_v5"
+V21_ACTION_SCHEMA = "iron_gear_latency_20hz_v6"
 YAW_LIMIT = 20.0
 PITCH_LIMIT = 10.0
 
 
 def is_continuous_schema(action_schema):
     return action_schema in (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
-                             V2_ACTION_SCHEMA)
+                             V2_ACTION_SCHEMA, V21_ACTION_SCHEMA)
 
 
 def has_continuous_pitch(action_schema):
-    return action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA)
+    return action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                             V21_ACTION_SCHEMA)
+
+
+def is_iron_gear_schema(action_schema):
+    return action_schema in (V2_ACTION_SCHEMA, V21_ACTION_SCHEMA)
 
 
 def categorical_contract(action_schema):
-    if action_schema == V2_ACTION_SCHEMA:
+    if is_iron_gear_schema(action_schema):
         return V2_HEADS, V2_DISCRETE_COLS
     return CONTINUOUS_HEADS, CONTINUOUS_DISCRETE_COLS
 
 
 def action_observation_dim(action_schema):
+    if action_schema == V21_ACTION_SCHEMA:
+        return N_NETWORK_OBS
     if action_schema == V2_ACTION_SCHEMA:
         return 35
     return 25 if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA else 24
@@ -66,7 +74,7 @@ def checkpoint_action_schema(config):
     schema = config.get("action_schema", LEGACY_ACTION_SCHEMA)
     if schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
                       CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
-                      V2_ACTION_SCHEMA):
+                      V2_ACTION_SCHEMA, V21_ACTION_SCHEMA):
         raise ValueError(f"unsupported action schema {schema}")
     return schema
 
@@ -129,6 +137,23 @@ def transfer_v1_look_policy(target, source_state):
     # Forward, strafe, jump and sprint occupy the first ten logits in both actors.
     own["actor.weight"][:10].copy_(source_state["actor.weight"][:10])
     own["actor.bias"][:10].copy_(source_state["actor.bias"][:10])
+    target.load_state_dict(own)
+
+
+def transfer_v2_latency_policy(target, source_state):
+    """Expand a 35-input V2 fighter to four delayed frames plus own RTT.
+
+    The newest delivered frame starts with the complete V2 behavior. Historical
+    frames and ping begin at zero influence and are learned during V2.1 training.
+    """
+    if target.action_schema != V21_ACTION_SCHEMA:
+        raise ValueError("latency transfer target must use the V2.1 schema")
+    own = target.state_dict()
+    for name, value in source_state.items():
+        if name != "body.0.weight":
+            own[name].copy_(value)
+    own["body.0.weight"].zero_()
+    own["body.0.weight"][:, :35].copy_(source_state["body.0.weight"])
     target.load_state_dict(own)
 
 
@@ -235,7 +260,8 @@ def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
     rows = torch.zeros((*a.shape[:-1], N_ACT), dtype=torch.float64, device=device)
     rows[..., 0] = torch.tensor(FWD, dtype=torch.float64, device=device)[a[..., 0].long()]
     rows[..., 1] = torch.tensor(STRAFE, dtype=torch.float64, device=device)[a[..., 1].long()]
-    if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
+    if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                          V21_ACTION_SCHEMA):
         rows[..., 2] = a[..., 2].to(torch.float64).clamp(-YAW_LIMIT, YAW_LIMIT)
         rows[..., 3] = a[..., 3].to(torch.float64).clamp(-PITCH_LIMIT, PITCH_LIMIT)
     elif action_schema == CONTINUOUS_ACTION_SCHEMA:
@@ -257,7 +283,7 @@ def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
     # Frozen pre-V2 callers may still provide the original seven policy columns.
     tail = a.shape[-1] - 4
     rows[..., 4:4 + tail] = a[..., 4:].to(torch.float64)
-    if action_schema == V2_ACTION_SCHEMA:
+    if is_iron_gear_schema(action_schema):
         # Policy col 6 is one categorical combat intent: idle/attack/block.
         rows[..., 6] = (a[..., 6] == 1).to(torch.float64)
         rows[..., 8] = (a[..., 6] == 2).to(torch.float64)
@@ -319,7 +345,7 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
     out[:, 4] = 0
     out[:, 5] = ((dist > 1.7) & aligned_move).long()
     ready_attack = ((dist < 3.0) & aligned_attack & (obs[:, 15] > 0.9))
-    if action_schema == V2_ACTION_SCHEMA:
+    if is_iron_gear_schema(action_schema):
         opponent_blocking = obs[:, 28] > 0.5
         shield_available = obs[:, 29] <= 0.0
         # Keep use held through post-hit knockback; a shield needs five
@@ -366,7 +392,7 @@ def scripted_baseline(obs, device, attack=True,
                         torch.where(lateral < -0.01, torch.tensor(15.0, device=device),
                                     torch.tensor(0.0, device=device)))).to(torch.float64)
     rows[:, 5] = ((dist > 1.7) & aligned_move).to(torch.float64)
-    if action_schema == V2_ACTION_SCHEMA:
+    if is_iron_gear_schema(action_schema):
         opponent_blocking = obs[:, 28] > 0.5
         shield_available = obs[:, 29] <= 0.0
         ready = (dist < 3.0) & aligned_attack & (obs[:, 15] > 0.9)
@@ -432,7 +458,7 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
                     torch.randint(0, len(yaw_values), (env.n, 2), device=device)]
             random_rows[:, :, 5] = (random_rows[:, :, 0] > 0).to(torch.float64)
             rows = torch.where(perturb[:, :, None], random_rows, rows)
-        if action_schema == V2_ACTION_SCHEMA:
+        if is_iron_gear_schema(action_schema):
             # Symmetric teachers lower both shields to swing on the same tick,
             # producing no axe-vs-shield examples. Alternate a persistent blocker
             # role in 16-tick windows so both egocentric roles observe raised
@@ -523,7 +549,7 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
                "bc_accuracy": float(np.mean(head_accuracy))}
     if is_continuous_schema(action_schema):
         names = (("forward", "strafe", "jump", "sprint", "weapon", "combat")
-                 if action_schema == V2_ACTION_SCHEMA else
+                 if is_iron_gear_schema(action_schema) else
                  ("forward", "strafe", "jump", "sprint", "attack"))
         metrics["bc_yaw_mae_deg"] = float(yaw_abs_error / x.shape[0])
         if has_continuous_pitch(action_schema):
@@ -553,7 +579,9 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
     if opponent not in ("stationary", "random", "chaser"):
         raise ValueError(f"unknown opponent {opponent}")
     n = episodes
-    env = VecPvp(n, device=device.index or 0)
+    env = (NetworkVecPvp(n, device=device.index or 0)
+           if action_schema == V21_ACTION_SCHEMA else
+           VecPvp(n, device=device.index or 0))
     seeds = np.arange(900000, 900000 + n, dtype=np.uint64)
     obs = env_tensor(env.reset(seeds), device)
     wins = losses = draws = 0
@@ -660,11 +688,12 @@ def main():
     action_schema = os.environ.get("PVP_ACTION_SCHEMA", FINE_ACTION_SCHEMA)
     if action_schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
                              CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
-                             V2_ACTION_SCHEMA):
+                             V2_ACTION_SCHEMA, V21_ACTION_SCHEMA):
         raise ValueError(f"unsupported PVP_ACTION_SCHEMA {action_schema}")
     default_repeat = ("1" if action_schema in
                       (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-                       CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else "4")
+                       CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                       V21_ACTION_SCHEMA) else "4")
     cfg = {
         "n": int(os.environ.get("PVP_N", "4096")),
         "rollout": int(os.environ.get("PVP_ROLLOUT", "64")),
@@ -690,15 +719,25 @@ def main():
         "bc_perturb": float(os.environ.get(
             "PVP_BC_PERTURB", "0.25" if action_schema in
             (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-             CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else "0")),
-        "checkpoint_contract": ("netherite_pvp_iron_gear_actor_critic_v5"
+             CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+             V21_ACTION_SCHEMA) else "0")),
+        "network_domain": action_schema == V21_ACTION_SCHEMA,
+        "ping_min_ms": float(os.environ.get("PVP_PING_MIN_MS", "20")),
+        "ping_max_ms": float(os.environ.get("PVP_PING_MAX_MS", "200")),
+        "ping_variation_fraction": 0.05 if action_schema == V21_ACTION_SCHEMA else 0.0,
+        "network_history_frames": 4 if action_schema == V21_ACTION_SCHEMA else 1,
+        "checkpoint_contract": ("netherite_pvp_latency_actor_critic_v6"
+                                if action_schema == V21_ACTION_SCHEMA else
+                                "netherite_pvp_iron_gear_actor_critic_v5"
                                 if action_schema == V2_ACTION_SCHEMA else
                                 "netherite_pvp_mixed_look_actor_critic_v4"
                                 if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA else
                                 "netherite_pvp_mixed_actor_critic_v3"
                                 if action_schema == CONTINUOUS_ACTION_SCHEMA else
                                 "netherite_pvp_actor_critic_v2"),
-        "observation_schema": ("egocentric_iron_gear_state_35_v4"
+        "observation_schema": ("four_frame_iron_gear_plus_own_ping_141_v5"
+                               if action_schema == V21_ACTION_SCHEMA else
+                               "egocentric_iron_gear_state_35_v4"
                                if action_schema == V2_ACTION_SCHEMA else
                                "egocentric_state_25_v3"
                                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA
@@ -712,6 +751,8 @@ def main():
         "seed": int(os.environ.get("PVP_SEED", "12345")),
         "init_checkpoint": os.environ.get(
             "PVP_INIT_CHECKPOINT",
+            str(HERE.parent.parent / "artifacts/pilots/pilot21/selfplay.pt")
+            if action_schema == V21_ACTION_SCHEMA else
             str(HERE.parent.parent / "artifacts/pilots/pilot17/selfplay.pt")
             if action_schema == V2_ACTION_SCHEMA else ""),
     }
@@ -727,14 +768,21 @@ def main():
     # policy receiving both sides of a symmetric zero-sum encounter.
     policies = [Policy(action_schema=action_schema).to(device),
                 Policy(action_schema=action_schema).to(device)]
-    if action_schema == V2_ACTION_SCHEMA and cfg["init_checkpoint"]:
+    if is_iron_gear_schema(action_schema) and cfg["init_checkpoint"]:
         init = torch.load(cfg["init_checkpoint"], map_location=device,
                           weights_only=False)
         for role in range(2):
-            transfer_v1_look_policy(policies[role], init["models"][role])
+            if action_schema == V21_ACTION_SCHEMA:
+                transfer_v2_latency_policy(policies[role], init["models"][role])
+            else:
+                transfer_v1_look_policy(policies[role], init["models"][role])
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
                   for p in policies]
-    env = VecPvp(cfg["n"], device=device.index or 0)
+    env = (NetworkVecPvp(cfg["n"], device=device.index or 0,
+                         min_ping_ms=cfg["ping_min_ms"],
+                         max_ping_ms=cfg["ping_max_ms"])
+           if cfg["network_domain"] else
+           VecPvp(cfg["n"], device=device.index or 0))
     seeds = np.arange(cfg["seed"], cfg["seed"] + cfg["n"], dtype=np.uint64)
     obs = env_tensor(env.reset(seeds), device)
     obs, bc_metrics = behavior_clone(
@@ -824,7 +872,7 @@ def main():
             next_obs, reward, done, hits, damage = env.step(
                 executed_rows, repeat=step_repeat)
             next_obs = env_tensor(next_obs, device)
-            if cfg["action_schema"] == V2_ACTION_SCHEMA:
+            if is_iron_gear_schema(cfg["action_schema"]):
                 gear_counts["axe"] += (rows[:, :, 7] > 0.5).sum(0)
                 gear_counts["attack"] += (rows[:, :, 6] > 0.5).sum(0)
                 gear_counts["block_intent"] += (rows[:, :, 8] > 0.5).sum(0)
@@ -984,7 +1032,7 @@ def main():
         row["action_hold_fraction"] = (
             chunk_held_actions / max(1, cfg["n"] * 2 * cfg["rollout"]))
         row["extra_repeat_fraction"] = chunk_extra_repeats / max(1, cfg["rollout"])
-        if cfg["action_schema"] == V2_ACTION_SCHEMA:
+        if is_iron_gear_schema(cfg["action_schema"]):
             denom = max(1, cfg["n"] * cfg["rollout"])
             for name, counts in gear_counts.items():
                 row[f"{name}_role0"] = int(counts[0])

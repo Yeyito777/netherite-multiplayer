@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from pvp import N_ACT, VecPvp
+from pvp import N_ACT, NetworkVecPvp, VecPvp
 from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
                             FINE_ACTION_SCHEMA, PITCH_LIMIT, Policy, YAW_LIMIT,
-                            V2_ACTION_SCHEMA,
+                            V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             checkpoint_action_schema, decode_actions, env_tensor,
                             greedy_actions, is_continuous_schema, policy_input,
                             sample_actions)
@@ -20,7 +20,7 @@ from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCH
 @torch.no_grad()
 def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         swap_policies=False, deterministic_yaw=False, action_hold_prob=0.0,
-        extra_repeat_prob=0.0):
+        extra_repeat_prob=0.0, ping_min_ms=20.0, ping_max_ms=200.0):
     torch.manual_seed(seed)
     device = torch.device("cpu")
     policies = [Policy(action_schema=action_schema).eval(),
@@ -28,7 +28,9 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
     for role, policy in enumerate(policies):
         source_role = 1 - role if swap_policies else role
         policy.load_state_dict(checkpoint["models"][source_role])
-    env = VecPvp(episodes)
+    env = (NetworkVecPvp(episodes, min_ping_ms=ping_min_ms,
+                         max_ping_ms=ping_max_ms)
+           if action_schema == V21_ACTION_SCHEMA else VecPvp(episodes))
     seeds = np.arange(seed, seed + episodes, dtype=np.uint64)
     obs = env_tensor(env.reset(seeds), device)
     active = torch.ones(episodes, dtype=torch.bool)
@@ -177,6 +179,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         "action_schema": action_schema,
         "action_hold_prob": action_hold_prob,
         "extra_repeat_prob": extra_repeat_prob,
+        "ping_min_ms": ping_min_ms if action_schema == V21_ACTION_SCHEMA else None,
+        "ping_max_ms": ping_max_ms if action_schema == V21_ACTION_SCHEMA else None,
         "episodes": episodes, "horizon_decisions": horizon, "repeat": repeat,
         "wins_role0": wins[0], "wins_role1": wins[1], "draws": draws,
         "horizon_draws": horizon_draws,
@@ -236,13 +240,17 @@ def main():
                     help="independently execute each role's prior action")
     ap.add_argument("--extra-repeat-prob", type=float, default=0.0,
                     help="probability a decision spans one additional env tick")
+    ap.add_argument("--ping-min-ms", type=float, default=20.0)
+    ap.add_argument("--ping-max-ms", type=float, default=200.0)
     args = ap.parse_args()
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = ck.get("config", {})
     action_schema = checkpoint_action_schema(config)
     repeat = args.repeat if args.repeat is not None else int(config.get("repeat", 4))
     domain = {"action_hold_prob": args.action_hold_prob,
-              "extra_repeat_prob": args.extra_repeat_prob}
+              "extra_repeat_prob": args.extra_repeat_prob,
+              "ping_min_ms": args.ping_min_ms,
+              "ping_max_ms": args.ping_max_ms}
     result = {
         "checkpoint": str(args.checkpoint),
         "action_schema": action_schema, "repeat": repeat,
