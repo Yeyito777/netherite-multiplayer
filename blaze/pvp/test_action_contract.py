@@ -150,6 +150,8 @@ def test_cpu_cuda_fine_trajectory_and_observation_parity():
         rows[:, :, 1] = rng.integers(-1, 2, size=(n, 2))
         rows[:, :, 2] = yaw_grid[rng.integers(0, len(yaw_grid), size=(n, 2))]
         rows[:, :, 4:7] = rng.integers(0, 2, size=(n, 2, 3))
+        rows[:, :, 7] = rng.integers(0, 2, size=(n, 2))  # sword/axe
+        rows[:, :, 8] = rng.integers(0, 2, size=(n, 2))  # shield use
         co = cpu.step(rows, repeat=1)
         go = gpu.step(rows, repeat=1)
         for c, g in zip(co, go):

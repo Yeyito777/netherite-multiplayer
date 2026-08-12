@@ -758,6 +758,7 @@ public class Recorder {
         p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.FEET,
             new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_BOOTS));
         p.resetActiveHand();
+        p.getCooldownTracker().removeCooldown(net.minecraft.init.Items.SHIELD);
         p.setHealth(p.getMaxHealth());
         p.getFoodStats().setFoodLevel(20);
         p.getFoodStats().setFoodSaturationLevel(5.0F);

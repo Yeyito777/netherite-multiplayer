@@ -371,7 +371,8 @@ def scripted_baseline(obs, device, attack=True,
         threatened = (dist < 3.2) & aligned_attack
         rows[:, 7] = opponent_blocking.to(torch.float64)
         rows[:, 6] = (ready & attack).to(torch.float64)
-        rows[:, 8] = ((~ready | ~attack) & threatened & shield_available).to(torch.float64)
+        rows[:, 8] = ((~ready | (not attack)) & threatened &
+                      shield_available).to(torch.float64)
     elif attack:
         # Only swing when charged. This is stronger and more Minecraft-like
         # than holding attack every tick through hurt resistance.
@@ -758,6 +759,10 @@ def main():
         chunk_damage = torch.zeros(2, device=device)
         kills = torch.zeros(2, dtype=torch.int64, device=device)
         draws = 0
+        gear_counts = {name: torch.zeros(2, dtype=torch.int64, device=device)
+                       for name in ("axe", "attack", "block_intent",
+                                    "blocking", "switch", "shield_disable")}
+        mutual_block_ticks = 0
         for _ in range(cfg["rollout"]):
             with torch.no_grad():
                 role_out = []
@@ -782,6 +787,18 @@ def main():
             decision_obs = obs.clone()
             next_obs, reward, done, hits, damage = env.step(rows, repeat=cfg["repeat"])
             next_obs = env_tensor(next_obs, device)
+            if cfg["action_schema"] == V2_ACTION_SCHEMA:
+                gear_counts["axe"] += (rows[:, :, 7] > 0.5).sum(0)
+                gear_counts["attack"] += (rows[:, :, 6] > 0.5).sum(0)
+                gear_counts["block_intent"] += (rows[:, :, 8] > 0.5).sum(0)
+                gear_counts["blocking"] += (decision_obs[:, :, 27] > 0.5).sum(0)
+                gear_counts["switch"] += (
+                    rows[:, :, 7].long() != decision_obs[:, :, 25].long()).sum(0)
+                gear_counts["shield_disable"] += (
+                    (next_obs[:, :, 29] > 0.5) &
+                    (decision_obs[:, :, 29] <= 0.5)).sum(0)
+                mutual_block_ticks += int(((decision_obs[:, 0, 27] > 0.5) &
+                                           (decision_obs[:, 1, 27] > 0.5)).sum())
             reward = env_tensor(reward, device)
             train_reward = reward.clone()
             if chunk < cfg["bootstrap_chaser"]:
@@ -926,6 +943,13 @@ def main():
                "damage_per_second": float(chunk_damage.sum()) / elapsed,
                "kills_role0": int(kills[0]), "kills_role1": int(kills[1]),
                "draws": draws, **losses}
+        if cfg["action_schema"] == V2_ACTION_SCHEMA:
+            denom = max(1, cfg["n"] * cfg["rollout"])
+            for name, counts in gear_counts.items():
+                row[f"{name}_role0"] = int(counts[0])
+                row[f"{name}_role1"] = int(counts[1])
+                row[f"{name}_fraction"] = float(counts.sum()) / (2 * denom)
+            row["mutual_block_fraction"] = mutual_block_ticks / denom
         if chunk % 5 == 0 or chunk == cfg["chunks"] - 1:
             row.update(evaluate(policies[0], device, episodes=eval_n,
                                 opponent="stationary", stochastic=False,
