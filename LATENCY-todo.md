@@ -9,6 +9,6 @@
 - [x] Make real-Minecraft deployment measure/feed each client's own RTT to the corresponding policy.
 - [x] Add tests for delay semantics, ping privacy/range, masked resets, checkpoint compatibility, and deployment inputs.
 - [x] Run CPU and CUDA regression/parity tests.
-- [ ] Train an adversarial V2.1 candidate and evaluate it under multiple latency profiles.
-- [ ] Deploy the candidate to real Minecraft, verify 20 Hz timing, and inspect dual-POV behavior.
-- [ ] Commit and push the completed V2.1 campaign.
+- [x] Train an adversarial V2.1 candidate and evaluate it under multiple latency profiles.
+- [x] Deploy the candidate to real Minecraft, verify 20 Hz timing, and inspect dual-POV behavior.
+- [x] Commit and push the completed V2.1 campaign.
