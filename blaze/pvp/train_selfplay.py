@@ -316,6 +316,19 @@ def _teacher_pitch_delta(obs, action_schema=LEGACY_ACTION_SCHEMA):
     return (desired_pitch - current_pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT)
 
 
+def _teacher_yaw_delta(lateral, longitudinal, obs, action_schema):
+    desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
+    desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
+                          torch.full_like(desired, 20.0), desired)
+    if action_schema == V21_ACTION_SCHEMA:
+        # Delayed proportional control with unit gain oscillates: at 140 ms the
+        # old teacher alternated near +/-20 degrees and never hit a 35 ms rival.
+        # Reduce closed-loop gain as RTT grows (0.53 at 35 ms, 0.22 at 140 ms).
+        ping_ms = obs[:, -1].clamp(0.0, 1.05) * 200.0
+        desired = desired / (1.0 + ping_ms / 40.0)
+    return desired.clamp(-YAW_LIMIT, YAW_LIMIT)
+
+
 def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA):
     """Categorical policy targets for the deterministic boxing teacher."""
     lateral, longitudinal = _teacher_target(obs, action_schema)
@@ -339,10 +352,8 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
     # Pure lateral error is zero when the target is exactly behind. Always turn
     # clockwise in that tie so crossing an opponent cannot create a blind state.
     if is_continuous_schema(action_schema):
-        desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
-        desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
-                              torch.full_like(desired, 20.0), desired)
-        out[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT)
+        out[:, 2] = _teacher_yaw_delta(
+            lateral, longitudinal, obs, action_schema)
         if has_continuous_pitch(action_schema):
             out[:, 3] = _teacher_pitch_delta(obs, action_schema)
     elif action_schema == FINE_ACTION_SCHEMA:
@@ -388,10 +399,8 @@ def scripted_baseline(obs, device, attack=True,
     aligned_attack = bearing < (20.0 * np.pi / 180.0)
     rows[:, 0] = ((dist > 1.7) & aligned_move).to(torch.float64)
     if is_continuous_schema(action_schema):
-        desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
-        desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
-                              torch.full_like(desired, 20.0), desired)
-        rows[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT).to(torch.float64)
+        rows[:, 2] = _teacher_yaw_delta(
+            lateral, longitudinal, obs, action_schema).to(torch.float64)
         if has_continuous_pitch(action_schema):
             rows[:, 3] = _teacher_pitch_delta(obs, action_schema).to(torch.float64)
     elif action_schema == FINE_ACTION_SCHEMA:

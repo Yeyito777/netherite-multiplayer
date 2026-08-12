@@ -69,7 +69,10 @@ def test_latency_teacher_leads_moving_target_instead_of_chasing_stale_bearing():
     obs[0, -1] = 1.0        # own RTT = 200 ms, four-tick prediction horizon
     latency = scripted_action_indices(obs, action_schema=V21_ACTION_SCHEMA)
     no_latency = scripted_action_indices(obs[:, :35], action_schema=V2_ACTION_SCHEMA)
-    assert abs(float(latency[0, 2])) > abs(float(no_latency[0, 2])) + 1.0
+    # It still leads in the target's direction, but latency-conditioned gain keeps
+    # the delayed control loop well below the undamped command.
+    assert float(no_latency[0, 2]) == 0.0
+    assert -10.0 < float(latency[0, 2]) < -1.0
 
 
 def test_latency_schema_expands_v2_without_changing_initial_behavior():
