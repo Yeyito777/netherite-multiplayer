@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "blaze" / "pvp"))
 from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
                             FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA, FWD, PITCH,
                             PITCH_LIMIT, STRAFE, YAW, YAW_FINE, YAW_LIMIT, Policy,
+                            V2_ACTION_SCHEMA,
                             checkpoint_action_schema, is_continuous_schema,
                             policy_input)
 
@@ -97,6 +98,14 @@ def observation(players, role, legacy=False):
         (p["x"] + 16.0) / 32.0, (16.0 - p["x"]) / 32.0,
         (p["z"] + 16.0) / 32.0, (16.0 - p["z"]) / 32.0,
         p["pitch"] / 90.0,
+        float(p.get("weapon", 0)), float(q.get("weapon", 0)),
+        float(p.get("blocking", False)), float(q.get("blocking", False)),
+        float(p.get("shield_disabled", False)),
+        float(q.get("shield_disabled", False)),
+        max(0.0, 1.0 - p.get("shield_damage", 0) / 336.0),
+        max(0.0, 1.0 - q.get("shield_damage", 0) / 336.0),
+        min(1.0, p.get("shield_use_ticks", 0) / 5.0),
+        min(1.0, q.get("shield_use_ticks", 0) / 5.0),
     ], dtype=np.float32)
 
 
@@ -119,14 +128,19 @@ def policy_action(policy, obs, stochastic=False,
             yaw_latent = torch.distributions.Normal(yaw_latent, std).sample()
         yaw = float(YAW_LIMIT * torch.tanh(yaw_latent)[0])
         pitch = 0.0
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
             pitch_latent = actor["pitch_mean"]
             if sample_continuous_pitch:
                 std = actor["pitch_log_std"].clamp(-4.0, 0.0).exp()
                 pitch_latent = torch.distributions.Normal(pitch_latent, std).sample()
             pitch = float(PITCH_LIMIT * torch.tanh(pitch_latent)[0])
+        if action_schema == V2_ACTION_SCHEMA:
+            combat = indices[5]
+            return [FWD[indices[0]], STRAFE[indices[1]], yaw, pitch,
+                    float(indices[2]), float(indices[3]), float(combat == 1),
+                    float(indices[4]), float(combat == 2)]
         return [FWD[indices[0]], STRAFE[indices[1]], yaw, pitch,
-                float(indices[2]), float(indices[3]), float(indices[4])]
+                float(indices[2]), float(indices[3]), float(indices[4]), 0.0, 0.0]
     logits = actor
     if stochastic:
         indices = [int(torch.distributions.Categorical(logits=h).sample()) for h in logits]
@@ -157,16 +171,25 @@ def decode_client_player(row):
         "on_ground": bool(row["on_ground"]), "sprinting": bool(row["sprinting"]),
         "dead": bool(row["dead"]), "deaths": int(row.get("deaths", 0)),
         "policy_action_seq": int(row.get("policy_action_seq", 0)),
+        "weapon": int(row.get("held_slot", 0) == 1),
+        "blocking": bool(row.get("blocking", False)),
+        "using_shield": bool(row.get("using_shield", False)),
+        "shield_use_ticks": int(row.get("shield_use_ticks", 0)),
+        "shield_disabled": bool(row.get("shield_disabled", False)),
+        "shield_damage": int(row.get("shield_damage", 0)),
     }
 
 
 def client_action(raw, client_attack=False):
-    forward, strafe, dyaw, dpitch, jump, sprint, _ = raw
+    forward, strafe, dyaw, dpitch, jump, sprint, attack = raw[:7]
+    weapon = int(raw[7]) if len(raw) > 7 else 0
+    block = int(raw[8]) if len(raw) > 8 else 0
     return {"forward": int(forward > 0), "back": int(forward < 0),
             "left": int(strafe < 0), "right": int(strafe > 0),
             "dyaw": dyaw, "dpitch": dpitch, "jump": int(jump),
-            "sprint": int(sprint), "attack": int(client_attack and raw[6] > 0.5),
-            "attack_once": int(client_attack and raw[6] > 0.5)}
+            "sprint": int(sprint), "attack": int(client_attack and attack > 0.5),
+            "attack_once": int(client_attack and attack > 0.5),
+            "use": block, "hotbar": weapon}
 
 
 def main():
@@ -216,7 +239,7 @@ def main():
     repeat_seconds = (args.repeat_seconds if args.repeat_seconds is not None else
                       (0.0 if action_schema in
                        (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-                        CONTINUOUS_LOOK_ACTION_SCHEMA) else 0.2))
+                        CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else 0.2))
     policies = [Policy(action_schema=action_schema).eval(),
                 Policy(action_schema=action_schema).eval()]
     for role in range(2):

@@ -11,6 +11,7 @@ import torch
 from pvp import N_ACT, VecPvp
 from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
                             FINE_ACTION_SCHEMA, PITCH_LIMIT, Policy, YAW_LIMIT,
+                            V2_ACTION_SCHEMA,
                             checkpoint_action_schema, decode_actions, env_tensor,
                             greedy_actions, is_continuous_schema, policy_input,
                             sample_actions)
@@ -44,6 +45,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         "pitch_abs_sum": 0.0, "pitch_variation_sum": 0.0,
         "pitch_sign_reversals": 0, "pitch_saturated": 0,
         "absolute_pitch_sum": 0.0,
+        "axe_selected": 0, "attack_intent": 0, "block_intent": 0,
+        "mutual_block": 0,
     }
     previous_yaw = None
     previous_pitch = None
@@ -104,7 +107,7 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                  (yaw_delta.abs() > 0.1) & (previous_yaw.abs() > 0.1) &
                  active_players).sum())
         previous_yaw = yaw_delta.clone()
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
             pitch_delta = action_tensor[:, :, 3]
             pursuit["pitch_abs_sum"] += float(
                 (pitch_delta.abs() * active_players).sum())
@@ -120,6 +123,15 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                      (pitch_delta.abs() > 0.05) & (previous_pitch.abs() > 0.05) &
                      active_players).sum())
             previous_pitch = pitch_delta.clone()
+        if action_schema == V2_ACTION_SCHEMA:
+            pursuit["axe_selected"] += int(
+                ((action_tensor[:, :, 7] == 1) & active_players).sum())
+            pursuit["attack_intent"] += int(
+                ((action_tensor[:, :, 6] == 1) & active_players).sum())
+            pursuit["block_intent"] += int(
+                ((action_tensor[:, :, 6] == 2) & active_players).sum())
+            pursuit["mutual_block"] += int(
+                ((obs[:, 0, 27] > 0.5) & (obs[:, 1, 27] > 0.5) & active).sum())
         pursuit["distance_sum"] += float(distance[active_players].sum())
         rows = decode_actions(action_tensor, device, action_schema)
         obs, reward, done, hs, dmg = env.step(rows, repeat=repeat)
@@ -184,6 +196,11 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
             1000.0 * pursuit["pitch_sign_reversals"] / player_steps,
         "pitch_saturated_fraction": pursuit["pitch_saturated"] / player_steps,
         "mean_abs_pitch_deg": pursuit["absolute_pitch_sum"] / player_steps,
+        "axe_selected_fraction": pursuit["axe_selected"] / player_steps,
+        "attack_intent_fraction": pursuit["attack_intent"] / player_steps,
+        "block_intent_fraction": pursuit["block_intent"] / player_steps,
+        "mutual_block_lane_fraction": pursuit["mutual_block"] /
+            max(1, player_steps / 2),
         "mean_distance_blocks": pursuit["distance_sum"] / player_steps,
         "mean_decisions_to_first_hit": (float(observed_first_hits.float().mean())
                                         if len(observed_first_hits) else None),

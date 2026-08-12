@@ -6,8 +6,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CPU_SO = os.path.join(HERE, "pvp_cpu.so")
 CUDA_SO = os.path.join(HERE, "pvp_cuda.so")
 N_PLAYERS = 2
-N_ACT = 7
-N_OBS = 25
+N_ACT = 9
+N_OBS = 35
 
 
 class VecPvp:

@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE))
 from pvp import CPU_SO, CUDA_SO, N_ACT, VecPvp
 from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
                             FINE_ACTION_SCHEMA, LEGACY_ACTION_SCHEMA, Policy,
+                            V2_ACTION_SCHEMA,
                             checkpoint_action_schema, decode_actions, evaluate_actions,
                             greedy_actions, sample_actions, scripted_action_indices)
 
@@ -22,6 +23,7 @@ def test_checkpoint_schema_is_explicit_and_legacy_missing_is_frozen():
     assert checkpoint_action_schema({"action_schema": FINE_ACTION_SCHEMA}) == FINE_ACTION_SCHEMA
     assert checkpoint_action_schema({"action_schema": CONTINUOUS_ACTION_SCHEMA}) == CONTINUOUS_ACTION_SCHEMA
     assert checkpoint_action_schema({"action_schema": CONTINUOUS_LOOK_ACTION_SCHEMA}) == CONTINUOUS_LOOK_ACTION_SCHEMA
+    assert checkpoint_action_schema({"action_schema": V2_ACTION_SCHEMA}) == V2_ACTION_SCHEMA
     try:
         checkpoint_action_schema({"action_schema": "invented"})
     except ValueError:
@@ -110,7 +112,7 @@ def test_continuous_look_policy_and_teacher_control_both_axes():
 def test_pitch_observation_closes_accumulated_control_loop():
     env = VecPvp(1, so_path=CPU_SO)
     obs = np.asarray(env.reset(np.asarray([0], dtype=np.uint64))).copy()
-    assert obs.shape[-1] == 25 and obs[0, 0, 24] == 0.0
+    assert obs.shape[-1] >= 25 and obs[0, 0, 24] == 0.0
     rows = np.zeros((1, 2, N_ACT), dtype=np.float64)
     rows[0, 0, 3] = 7.25
     after = np.asarray(env.step(rows, repeat=1)[0]).copy()
@@ -147,7 +149,7 @@ def test_cpu_cuda_fine_trajectory_and_observation_parity():
         rows[:, :, 0] = rng.integers(-1, 2, size=(n, 2))
         rows[:, :, 1] = rng.integers(-1, 2, size=(n, 2))
         rows[:, :, 2] = yaw_grid[rng.integers(0, len(yaw_grid), size=(n, 2))]
-        rows[:, :, 4:] = rng.integers(0, 2, size=(n, 2, 3))
+        rows[:, :, 4:7] = rng.integers(0, 2, size=(n, 2, 3))
         co = cpu.step(rows, repeat=1)
         go = gpu.step(rows, repeat=1)
         for c, g in zip(co, go):
@@ -159,6 +161,20 @@ def test_cpu_cuda_fine_trajectory_and_observation_parity():
                 cpu.reset(seeds, done), gpu.reset(seeds, done).cpu().numpy())
     cpu.close()
     gpu.close()
+
+
+def test_v2_weapon_combat_head_is_exclusive_and_observation_expands():
+    torch.manual_seed(22)
+    policy = Policy(action_schema=V2_ACTION_SCHEMA)
+    assert policy.obs_dim == 35
+    actor, _ = policy(torch.randn(64, 35))
+    sampled, old_logp, _ = sample_actions(actor, V2_ACTION_SCHEMA)
+    replay_logp, _ = evaluate_actions(actor, sampled, V2_ACTION_SCHEMA)
+    torch.testing.assert_close(replay_logp, old_logp)
+    decoded = decode_actions(sampled, torch.device("cpu"), V2_ACTION_SCHEMA)
+    assert bool(((decoded[:, 6] + decoded[:, 8]) <= 1).all())
+    assert set(decoded[:, 7].tolist()) <= {0.0, 1.0}
+    assert sum(p.numel() for p in policy.parameters()) == 23444
 
 
 if __name__ == "__main__":

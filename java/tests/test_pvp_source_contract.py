@@ -46,3 +46,14 @@ def test_lockstep_and_pvp_responses_cannot_be_lost_to_synchronous_queue_race():
     assert "reply(inFlight, obs);" in text
     for name in ("setupReq", "attackReq", "stateReq"):
         assert f"{name}.resp.offer(" not in text
+
+
+def test_v2_setup_equips_fixed_iron_gear_and_observes_shield_state():
+    text = (JAVA / "netheritemod" / "Recorder.java").read_text()
+    for item in ("IRON_SWORD", "IRON_AXE", "SHIELD", "IRON_HELMET",
+                 "IRON_CHESTPLATE", "IRON_LEGGINGS", "IRON_BOOTS"):
+        assert f"net.minecraft.init.Items.{item}" in text
+    assert "EntityEquipmentSlot.OFFHAND" in text
+    assert '"blocking"' in text
+    assert '"shield_disabled"' in text
+    assert '"shield_use_ticks"' in text

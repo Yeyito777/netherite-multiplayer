@@ -15,16 +15,16 @@ def build():
 
 def main():
     build()
-    from pvp import VecPvp
+    from pvp import N_ACT, N_OBS, VecPvp
 
     n = 8
     seeds = np.arange(n, dtype=np.uint64)
     env = VecPvp(n, so_path=os.path.join(HERE, "pvp_cpu.so"))
     initial = env.reset(seeds).copy()
-    assert initial.shape == (n, 2, 25)
+    assert initial.shape == (n, 2, N_OBS)
     assert np.all(initial[:, :, 0:2] == 1.0)
 
-    zero = np.zeros((n, 2, 7), dtype=np.float64)
+    zero = np.zeros((n, 2, N_ACT), dtype=np.float64)
     first = tuple(x.copy() for x in env.step(zero))
     env.reset(seeds)
     replay = tuple(x.copy() for x in env.step(zero))
@@ -37,7 +37,7 @@ def main():
     total_hits = np.zeros((n, 2), dtype=np.int64)
     deaths = 0
     for _ in range(400):
-        act = np.zeros((n, 2, 7), dtype=np.float64)
+        act = np.zeros((n, 2, N_ACT), dtype=np.float64)
         for role in range(2):
             lateral = obs[:, role, 5]
             longitudinal = obs[:, role, 6]

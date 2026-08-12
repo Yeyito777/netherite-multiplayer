@@ -742,6 +742,22 @@ public class Recorder {
     private static void pvpResetPlayer(net.minecraft.entity.player.EntityPlayerMP p,
                                        double x, double y, double z, float yaw) {
         p.inventory.clear();
+        p.inventory.mainInventory.set(0,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_SWORD));
+        p.inventory.mainInventory.set(1,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_AXE));
+        p.inventory.currentItem = 0;
+        p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.OFFHAND,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.SHIELD));
+        p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.HEAD,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_HELMET));
+        p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.CHEST,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_CHESTPLATE));
+        p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.LEGS,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_LEGGINGS));
+        p.setItemStackToSlot(net.minecraft.inventory.EntityEquipmentSlot.FEET,
+            new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_BOOTS));
+        p.resetActiveHand();
         p.setHealth(p.getMaxHealth());
         p.getFoodStats().setFoodLevel(20);
         p.getFoodStats().setFoodSaturationLevel(5.0F);
@@ -4764,6 +4780,7 @@ sb.append("}");
                     pvpResetPlayer(p0, -4.0, 65.0, lateral0, -90.0F + yawDelta0);
                     pvpResetPlayer(p1,  4.0, 65.0, lateral1,  90.0F + yawDelta1);
                     reply(setupReq, "{\"ok\":true,\"arena\":\"stone32\""
+                        + ",\"loadout\":\"iron_sword_axe_shield\""
                         + ",\"lateral0\":" + lateral0 + ",\"lateral1\":" + lateral1
                         + ",\"yaw_delta0\":" + yawDelta0
                         + ",\"yaw_delta1\":" + yawDelta1 + "}");
@@ -6446,6 +6463,17 @@ sb.append("}");
         o.addProperty("held_id", stackId(hs));
         o.addProperty("held_count", stackCount(hs));
         o.addProperty("held_meta", stackMeta(hs));
+        net.minecraft.item.ItemStack shield =
+            p.getItemStackFromSlot(net.minecraft.inventory.EntityEquipmentSlot.OFFHAND);
+        boolean shieldItem = !shield.isEmpty()
+            && shield.getItem() == net.minecraft.init.Items.SHIELD;
+        int useTicks = p.isHandActive() ? p.getItemInUseMaxCount() : 0;
+        o.addProperty("using_shield", shieldItem && p.isHandActive());
+        o.addProperty("blocking", shieldItem && p.isActiveItemStackBlocking());
+        o.addProperty("shield_use_ticks", useTicks);
+        o.addProperty("shield_disabled",
+            p.getCooldownTracker().hasCooldown(net.minecraft.init.Items.SHIELD));
+        o.addProperty("shield_damage", shieldItem ? shield.getItemDamage() : 336);
         // active potion effects
         JsonArray pots = new JsonArray();
         try {

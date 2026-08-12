@@ -5,10 +5,11 @@
 #include <stdint.h>
 #include "../core/pvp_arena.h"
 
-#define PVP_ACT 7
-#define PVP_OBS 25
+#define PVP_ACT 9
+#define PVP_OBS 35
 
-/* Raw action row: forward, strafe, dyaw, dpitch, jump, sprint, attack. */
+/* Backward-compatible raw row: forward, strafe, dyaw, dpitch, jump, sprint,
+ * attack, weapon (0 sword/1 axe), shield block. V1 rows leave the suffix zero. */
 MC_HD static inline PvpAction pvp_decode_action(const double *a, int rep) {
     PvpAction out;
     out.forward = (float)a[0];
@@ -18,6 +19,8 @@ MC_HD static inline PvpAction pvp_decode_action(const double *a, int rep) {
     out.jump = (int)a[4];
     out.sprint = (int)a[5];
     out.attack = (int)a[6];
+    out.weapon = (int)a[7];
+    out.block = (int)a[8];
     return out;
 }
 
@@ -32,6 +35,8 @@ MC_HD static inline void pvp_match_init_seed(PvpMatch *m, uint64_t seed) {
     float yaw0 = (float)turn0 * 15.0F;
     float yaw1 = (float)turn1 * 15.0F;
     pvp_match_init(m);
+    m->rng = seed ^ 0x9e3779b97f4a7c15ULL;
+    if (!m->rng) m->rng = 1;
     /* Independent lateral offsets and +/-45 degree yaw errors force policies
      * to learn turn/re-engagement instead of memorizing one straight charge. */
     if (!axis) {
@@ -84,6 +89,18 @@ MC_HD static inline void pvp_observe_one(const PvpMatch *m,
     /* Continuous-look policies need accumulated pitch to close the loop.
      * Older policies consume the unchanged 24-value prefix. */
     o[24] = p->pitch / 90.0F;
+    o[25] = (float)p->weapon;
+    o[26] = (float)q->weapon;
+    o[27] = (float)p->blocking;
+    o[28] = (float)q->blocking;
+    /* The vanilla client exposes shield cooldown availability, not its exact
+     * remaining server ticks; keep the transferable observation boolean. */
+    o[29] = (float)(p->shield_disabled_ticks > 0);
+    o[30] = (float)(q->shield_disabled_ticks > 0);
+    o[31] = (float)p->shield_durability / PVP_SHIELD_DURABILITY;
+    o[32] = (float)q->shield_durability / PVP_SHIELD_DURABILITY;
+    o[33] = pvp_clampf((float)p->shield_use_ticks / 5.0F, 0.0F, 1.0F);
+    o[34] = pvp_clampf((float)q->shield_use_ticks / 5.0F, 0.0F, 1.0F);
 }
 
 MC_HD static inline void pvp_observe_match(const PvpMatch *m,

@@ -24,6 +24,8 @@ from pvp import N_ACT, VecPvp
 HEADS = (3, 3, 3, 3, 2, 2, 2)
 CONTINUOUS_HEADS = (3, 3, 2, 2, 2)
 CONTINUOUS_DISCRETE_COLS = (0, 1, 4, 5, 6)
+V2_HEADS = (3, 3, 2, 2, 2, 3)
+V2_DISCRETE_COLS = (0, 1, 4, 5, 7, 6)
 FWD = (-1.0, 0.0, 1.0)
 STRAFE = (-1.0, 0.0, 1.0)
 YAW = (-15.0, 0.0, 15.0)
@@ -33,15 +35,29 @@ LEGACY_ACTION_SCHEMA = "legacy_5hz_v1"
 FINE_ACTION_SCHEMA = "fine_yaw_20hz_v2"
 CONTINUOUS_ACTION_SCHEMA = "continuous_yaw_20hz_v3"
 CONTINUOUS_LOOK_ACTION_SCHEMA = "continuous_look_20hz_v4"
+V2_ACTION_SCHEMA = "iron_gear_20hz_v5"
 YAW_LIMIT = 20.0
 PITCH_LIMIT = 10.0
 
 
 def is_continuous_schema(action_schema):
-    return action_schema in (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA)
+    return action_schema in (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
+                             V2_ACTION_SCHEMA)
+
+
+def has_continuous_pitch(action_schema):
+    return action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA)
+
+
+def categorical_contract(action_schema):
+    if action_schema == V2_ACTION_SCHEMA:
+        return V2_HEADS, V2_DISCRETE_COLS
+    return CONTINUOUS_HEADS, CONTINUOUS_DISCRETE_COLS
 
 
 def action_observation_dim(action_schema):
+    if action_schema == V2_ACTION_SCHEMA:
+        return 35
     return 25 if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA else 24
 
 
@@ -49,7 +65,8 @@ def checkpoint_action_schema(config):
     """Missing schema means the frozen pilot-10-era 5 Hz contract."""
     schema = config.get("action_schema", LEGACY_ACTION_SCHEMA)
     if schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
-                      CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA):
+                      CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
+                      V2_ACTION_SCHEMA):
         raise ValueError(f"unsupported action schema {schema}")
     return schema
 
@@ -62,15 +79,15 @@ class Policy(nn.Module):
         self.body = nn.Sequential(
             nn.Linear(self.obs_dim, hidden), nn.Tanh(),
             nn.Linear(hidden, hidden), nn.Tanh())
-        heads = (CONTINUOUS_HEADS if is_continuous_schema(action_schema)
-                 else HEADS)
+        heads = (categorical_contract(action_schema)[0]
+                 if is_continuous_schema(action_schema) else HEADS)
         self.actor = nn.Linear(hidden, sum(heads))
         if is_continuous_schema(action_schema):
             self.yaw_mean = nn.Linear(hidden, 1)
             # About 2.7 degrees near zero at initialization. PPO may adapt it,
             # but deployment can use the mean while sampling tactical heads.
             self.yaw_log_std = nn.Parameter(torch.tensor([-2.0]))
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             self.pitch_mean = nn.Linear(hidden, 1)
             self.pitch_log_std = nn.Parameter(torch.tensor([-2.0]))
         self.critic = nn.Linear(hidden, 1)
@@ -79,15 +96,40 @@ class Policy(nn.Module):
         h = self.body(obs)
         raw = self.actor(h)
         if is_continuous_schema(self.action_schema):
-            actor = {"categorical": torch.split(raw, CONTINUOUS_HEADS, dim=-1),
+            actor = {"categorical": torch.split(
+                         raw, categorical_contract(self.action_schema)[0], dim=-1),
                      "yaw_mean": self.yaw_mean(h).squeeze(-1),
                      "yaw_log_std": self.yaw_log_std.expand(h.shape[0])}
-            if self.action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+            if has_continuous_pitch(self.action_schema):
                 actor.update({"pitch_mean": self.pitch_mean(h).squeeze(-1),
                               "pitch_log_std": self.pitch_log_std.expand(h.shape[0])})
         else:
             actor = torch.split(raw, HEADS, dim=-1)
         return actor, self.critic(h).squeeze(-1)
+
+
+def transfer_v1_look_policy(target, source_state):
+    """Copy V1.2 locomotion/look into the expanded V2 policy.
+
+    New observation columns start with zero influence and weapon/combat logits
+    remain freshly initialized. This preserves aiming without pretending the old
+    boxing attack head understands shields.
+    """
+    if target.action_schema != V2_ACTION_SCHEMA:
+        raise ValueError("V1 transfer target must use the V2 action schema")
+    own = target.state_dict()
+    for name in ("body.0.bias", "body.2.weight", "body.2.bias",
+                 "yaw_mean.weight", "yaw_mean.bias", "yaw_log_std",
+                 "pitch_mean.weight", "pitch_mean.bias", "pitch_log_std",
+                 "critic.weight", "critic.bias"):
+        own[name].copy_(source_state[name])
+    own["body.0.weight"].zero_()
+    old_in = source_state["body.0.weight"].shape[1]
+    own["body.0.weight"][:, :old_in].copy_(source_state["body.0.weight"])
+    # Forward, strafe, jump and sprint occupy the first ten logits in both actors.
+    own["actor.weight"][:10].copy_(source_state["actor.weight"][:10])
+    own["actor.bias"][:10].copy_(source_state["actor.bias"][:10])
+    target.load_state_dict(own)
 
 
 def policy_input(policy, obs):
@@ -112,7 +154,8 @@ def sample_actions(actor, action_schema=LEGACY_ACTION_SCHEMA,
         actions = torch.zeros((actor["yaw_mean"].shape[0], N_ACT),
                               dtype=torch.float32, device=actor["yaw_mean"].device)
         logps, entropy = [], []
-        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+        _, categorical_cols = categorical_contract(action_schema)
+        for head, col in zip(actor["categorical"], categorical_cols):
             dist = Categorical(logits=head)
             a = dist.sample()
             actions[:, col] = a
@@ -125,7 +168,7 @@ def sample_actions(actor, action_schema=LEGACY_ACTION_SCHEMA,
         # The latent entropy is a stable exploration proxy. The exact squashed
         # entropy has no simple closed form and is not needed by PPO ratios.
         entropy.append(yaw_dist.entropy())
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             pitch_dist = _look_distribution(actor, "pitch")
             latent = (actor["pitch_mean"] if deterministic_pitch
                       else pitch_dist.rsample())
@@ -151,10 +194,11 @@ def greedy_actions(actor, action_schema=LEGACY_ACTION_SCHEMA):
     if is_continuous_schema(action_schema):
         actions = torch.zeros((actor["yaw_mean"].shape[0], N_ACT),
                               dtype=torch.float32, device=actor["yaw_mean"].device)
-        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+        _, categorical_cols = categorical_contract(action_schema)
+        for head, col in zip(actor["categorical"], categorical_cols):
             actions[:, col] = head.argmax(-1)
         actions[:, 2] = YAW_LIMIT * torch.tanh(actor["yaw_mean"])
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             actions[:, 3] = PITCH_LIMIT * torch.tanh(actor["pitch_mean"])
         return actions
     return torch.stack([head.argmax(-1) for head in actor], dim=-1)
@@ -163,14 +207,15 @@ def greedy_actions(actor, action_schema=LEGACY_ACTION_SCHEMA):
 def evaluate_actions(actor, actions, action_schema=LEGACY_ACTION_SCHEMA):
     if is_continuous_schema(action_schema):
         logps, entropy = [], []
-        for head, col in zip(actor["categorical"], CONTINUOUS_DISCRETE_COLS):
+        _, categorical_cols = categorical_contract(action_schema)
+        for head, col in zip(actor["categorical"], categorical_cols):
             dist = Categorical(logits=head)
             logps.append(dist.log_prob(actions[:, col].long()))
             entropy.append(dist.entropy())
         yaw_dist = _look_distribution(actor, "yaw")
         logps.append(_look_log_prob(actor, "yaw", actions[:, 2], YAW_LIMIT))
         entropy.append(yaw_dist.entropy())
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             pitch_dist = _look_distribution(actor, "pitch")
             logps.append(_look_log_prob(
                 actor, "pitch", actions[:, 3], PITCH_LIMIT))
@@ -190,7 +235,7 @@ def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
     rows = torch.zeros((*a.shape[:-1], N_ACT), dtype=torch.float64, device=device)
     rows[..., 0] = torch.tensor(FWD, dtype=torch.float64, device=device)[a[..., 0].long()]
     rows[..., 1] = torch.tensor(STRAFE, dtype=torch.float64, device=device)[a[..., 1].long()]
-    if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+    if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
         rows[..., 2] = a[..., 2].to(torch.float64).clamp(-YAW_LIMIT, YAW_LIMIT)
         rows[..., 3] = a[..., 3].to(torch.float64).clamp(-PITCH_LIMIT, PITCH_LIMIT)
     elif action_schema == CONTINUOUS_ACTION_SCHEMA:
@@ -209,7 +254,13 @@ def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
         rows[..., 3] = torch.tensor(PITCH, dtype=torch.float64, device=device)[a[..., 3].long()]
     else:
         raise ValueError(f"unsupported action schema {action_schema}")
-    rows[..., 4:] = a[..., 4:].to(torch.float64)
+    # Frozen pre-V2 callers may still provide the original seven policy columns.
+    tail = a.shape[-1] - 4
+    rows[..., 4:4 + tail] = a[..., 4:].to(torch.float64)
+    if action_schema == V2_ACTION_SCHEMA:
+        # Policy col 6 is one categorical combat intent: idle/attack/block.
+        rows[..., 6] = (a[..., 6] == 1).to(torch.float64)
+        rows[..., 8] = (a[..., 6] == 2).to(torch.float64)
     return rows
 
 
@@ -237,8 +288,9 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
         out[:, 0] = 1
         out[:, 1] = 1
     else:
-        out = torch.ones((obs.shape[0], len(HEADS)), dtype=torch.long,
-                         device=obs.device)
+        out = torch.zeros((obs.shape[0], N_ACT), dtype=torch.long,
+                          device=obs.device)
+        out[:, :len(HEADS)] = 1
     # Brake before turning. Unconditional forward+sprint while the target was
     # behind taught the exact wide-orbit failure observed in real deployment.
     out[:, 0] = torch.where((dist > 1.7) & aligned_move, 2, 1)
@@ -250,7 +302,7 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
                               torch.full_like(desired, 20.0), desired)
         out[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT)
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             out[:, 3] = _teacher_pitch_delta(obs)
     elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
@@ -266,8 +318,18 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
         out[:, 3] = 1
     out[:, 4] = 0
     out[:, 5] = ((dist > 1.7) & aligned_move).long()
-    out[:, 6] = ((dist < 3.0) & aligned_attack &
-                 (obs[:, 15] > 0.9)).long() if attack else 0
+    ready_attack = ((dist < 3.0) & aligned_attack & (obs[:, 15] > 0.9))
+    if action_schema == V2_ACTION_SCHEMA:
+        opponent_blocking = obs[:, 28] > 0.5
+        shield_available = obs[:, 29] <= 0.0
+        threatened = (dist < 3.2) & aligned_attack
+        out[:, 7] = opponent_blocking.long()  # axe into shield, sword otherwise
+        out[:, 6] = torch.where(
+            ready_attack & attack, torch.ones_like(out[:, 6]),
+            torch.where(threatened & shield_available,
+                        torch.full_like(out[:, 6], 2), torch.zeros_like(out[:, 6])))
+    else:
+        out[:, 6] = ready_attack.long() if attack else 0
     return out
 
 
@@ -288,7 +350,7 @@ def scripted_baseline(obs, device, attack=True,
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
                               torch.full_like(desired, 20.0), desired)
         rows[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT).to(torch.float64)
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             rows[:, 3] = _teacher_pitch_delta(obs).to(torch.float64)
     elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
@@ -302,7 +364,15 @@ def scripted_baseline(obs, device, attack=True,
                         torch.where(lateral < -0.01, torch.tensor(15.0, device=device),
                                     torch.tensor(0.0, device=device)))).to(torch.float64)
     rows[:, 5] = ((dist > 1.7) & aligned_move).to(torch.float64)
-    if attack:
+    if action_schema == V2_ACTION_SCHEMA:
+        opponent_blocking = obs[:, 28] > 0.5
+        shield_available = obs[:, 29] <= 0.0
+        ready = (dist < 3.0) & aligned_attack & (obs[:, 15] > 0.9)
+        threatened = (dist < 3.2) & aligned_attack
+        rows[:, 7] = opponent_blocking.to(torch.float64)
+        rows[:, 6] = (ready & attack).to(torch.float64)
+        rows[:, 8] = ((~ready | ~attack) & threatened & shield_available).to(torch.float64)
+    elif attack:
         # Only swing when charged. This is stronger and more Minecraft-like
         # than holding attack every tick through hurt resistance.
         rows[:, 6] = ((dist < 3.0) & aligned_attack &
@@ -342,7 +412,7 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
             if is_continuous_schema(action_schema):
                 random_rows[:, :, 2] = (
                     torch.rand((env.n, 2), dtype=torch.float64, device=device) * 40.0 - 20.0)
-                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+                if has_continuous_pitch(action_schema):
                     random_rows[:, :, 3] = (
                         torch.rand((env.n, 2), dtype=torch.float64, device=device)
                         * 20.0 - 10.0)
@@ -374,11 +444,10 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
     # Attack and large turn corrections are rare in a teacher trajectory. Plain
     # aggregate CE reached high accuracy by predicting no-attack/straight, which
     # reproduced the real deployment failure. Balance every categorical head.
-    categorical_sizes = (CONTINUOUS_HEADS if is_continuous_schema(action_schema)
-                         else HEADS)
-    categorical_cols = (CONTINUOUS_DISCRETE_COLS
-                        if is_continuous_schema(action_schema)
-                        else tuple(range(len(HEADS))))
+    if is_continuous_schema(action_schema):
+        categorical_sizes, categorical_cols = categorical_contract(action_schema)
+    else:
+        categorical_sizes, categorical_cols = HEADS, tuple(range(len(HEADS)))
     class_weights = []
     for col, size in zip(categorical_cols, categorical_sizes):
         counts = torch.bincount(y[:, col].long(), minlength=size).float().clamp_min(1.0)
@@ -398,7 +467,7 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
                 yaw_target = torch.atanh(
                     (y[ix, 2] / YAW_LIMIT).clamp(-0.995, 0.995))
                 losses.append(F.smooth_l1_loss(actor["yaw_mean"], yaw_target))
-                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+                if has_continuous_pitch(action_schema):
                     pitch_target = torch.atanh(
                         (y[ix, 3] / PITCH_LIMIT).clamp(-0.995, 0.995))
                     losses.append(F.smooth_l1_loss(
@@ -431,16 +500,18 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
             if is_continuous_schema(action_schema):
                 yaw_abs_error += (YAW_LIMIT * torch.tanh(actor["yaw_mean"])
                                   - yy[:, 2]).abs().sum().double()
-                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+                if has_continuous_pitch(action_schema):
                     pitch_abs_error += (PITCH_LIMIT * torch.tanh(actor["pitch_mean"])
                                         - yy[:, 3]).abs().sum().double()
     head_accuracy = (correct / x.shape[0]).cpu().tolist()
     metrics = {"bc_loss": loss_total / max(1, updates),
                "bc_accuracy": float(np.mean(head_accuracy))}
     if is_continuous_schema(action_schema):
-        names = ("forward", "strafe", "jump", "sprint", "attack")
+        names = (("forward", "strafe", "jump", "sprint", "weapon", "combat")
+                 if action_schema == V2_ACTION_SCHEMA else
+                 ("forward", "strafe", "jump", "sprint", "attack"))
         metrics["bc_yaw_mae_deg"] = float(yaw_abs_error / x.shape[0])
-        if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+        if has_continuous_pitch(action_schema):
             metrics["bc_pitch_mae_deg"] = float(pitch_abs_error / x.shape[0])
     elif action_schema == FINE_ACTION_SCHEMA:
         names = ("forward", "strafe", "yaw_coarse", "yaw_fine", "jump", "sprint", "attack")
@@ -514,10 +585,11 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
         elif opponent == "random":
             if is_continuous_schema(action_schema):
                 random_actions = torch.zeros((n, N_ACT), device=device)
-                for size, col in zip(CONTINUOUS_HEADS, CONTINUOUS_DISCRETE_COLS):
+                sizes, cols = categorical_contract(action_schema)
+                for size, col in zip(sizes, cols):
                     random_actions[:, col] = torch.randint(size, (n,), device=device)
                 random_actions[:, 2] = torch.rand(n, device=device) * 40.0 - 20.0
-                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA:
+                if has_continuous_pitch(action_schema):
                     random_actions[:, 3] = torch.rand(n, device=device) * 20.0 - 10.0
             else:
                 random_actions = torch.stack(
@@ -572,11 +644,12 @@ def evaluate(policy, device, episodes=256, horizon=300, repeat=4,
 def main():
     action_schema = os.environ.get("PVP_ACTION_SCHEMA", FINE_ACTION_SCHEMA)
     if action_schema not in (LEGACY_ACTION_SCHEMA, FINE_ACTION_SCHEMA,
-                             CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA):
+                             CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCHEMA,
+                             V2_ACTION_SCHEMA):
         raise ValueError(f"unsupported PVP_ACTION_SCHEMA {action_schema}")
     default_repeat = ("1" if action_schema in
                       (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-                       CONTINUOUS_LOOK_ACTION_SCHEMA) else "4")
+                       CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else "4")
     cfg = {
         "n": int(os.environ.get("PVP_N", "4096")),
         "rollout": int(os.environ.get("PVP_ROLLOUT", "64")),
@@ -598,13 +671,17 @@ def main():
         "bc_perturb": float(os.environ.get(
             "PVP_BC_PERTURB", "0.25" if action_schema in
             (FINE_ACTION_SCHEMA, CONTINUOUS_ACTION_SCHEMA,
-             CONTINUOUS_LOOK_ACTION_SCHEMA) else "0")),
-        "checkpoint_contract": ("netherite_pvp_mixed_look_actor_critic_v4"
+             CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA) else "0")),
+        "checkpoint_contract": ("netherite_pvp_iron_gear_actor_critic_v5"
+                                if action_schema == V2_ACTION_SCHEMA else
+                                "netherite_pvp_mixed_look_actor_critic_v4"
                                 if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA else
                                 "netherite_pvp_mixed_actor_critic_v3"
                                 if action_schema == CONTINUOUS_ACTION_SCHEMA else
                                 "netherite_pvp_actor_critic_v2"),
-        "observation_schema": ("egocentric_state_25_v3"
+        "observation_schema": ("egocentric_iron_gear_state_35_v4"
+                               if action_schema == V2_ACTION_SCHEMA else
+                               "egocentric_state_25_v3"
                                if action_schema == CONTINUOUS_LOOK_ACTION_SCHEMA
                                else "egocentric_state_24_v2"),
         "obs_basis": "movement_v2",
@@ -614,6 +691,10 @@ def main():
             "PVP_EVAL_HORIZON",
             str(1200 // int(os.environ.get("PVP_REPEAT", default_repeat))))),
         "seed": int(os.environ.get("PVP_SEED", "12345")),
+        "init_checkpoint": os.environ.get(
+            "PVP_INIT_CHECKPOINT",
+            str(HERE.parent.parent / "artifacts/pilots/pilot17/selfplay.pt")
+            if action_schema == V2_ACTION_SCHEMA else ""),
     }
     out = pathlib.Path(os.environ.get("PVP_OUT", str(HERE / "out")))
     out.mkdir(parents=True, exist_ok=True)
@@ -627,6 +708,11 @@ def main():
     # policy receiving both sides of a symmetric zero-sum encounter.
     policies = [Policy(action_schema=action_schema).to(device),
                 Policy(action_schema=action_schema).to(device)]
+    if action_schema == V2_ACTION_SCHEMA and cfg["init_checkpoint"]:
+        init = torch.load(cfg["init_checkpoint"], map_location=device,
+                          weights_only=False)
+        for role in range(2):
+            transfer_v1_look_policy(policies[role], init["models"][role])
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
                   for p in policies]
     env = VecPvp(cfg["n"], device=device.index or 0)
