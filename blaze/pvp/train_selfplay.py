@@ -710,6 +710,8 @@ def main():
         "bootstrap_static": int(os.environ.get("PVP_BOOTSTRAP_STATIC", "10")),
         "bootstrap_chaser": int(os.environ.get("PVP_BOOTSTRAP_CHASER", "20")),
         "approach_reward": float(os.environ.get("PVP_APPROACH_REWARD", "0.1")),
+        "weapon_switch_cost": float(os.environ.get("PVP_SWITCH_COST", "0.02")),
+        "shield_disable_bonus": float(os.environ.get("PVP_SHIELD_DISABLE_BONUS", "0.5")),
         # Opt-in deployment-domain randomization, calibrated from the measured
         # real-client timing report rather than broad arbitrary perturbations.
         "action_hold_prob": float(os.environ.get("PVP_ACTION_HOLD_PROB", "0")),
@@ -768,12 +770,17 @@ def main():
     # policy receiving both sides of a symmetric zero-sum encounter.
     policies = [Policy(action_schema=action_schema).to(device),
                 Policy(action_schema=action_schema).to(device)]
+    resume_same_schema = False
     if is_iron_gear_schema(action_schema) and cfg["init_checkpoint"]:
         init = torch.load(cfg["init_checkpoint"], map_location=device,
                           weights_only=False)
         for role in range(2):
             if action_schema == V21_ACTION_SCHEMA:
-                transfer_v2_latency_policy(policies[role], init["models"][role])
+                if checkpoint_action_schema(init.get("config", {})) == V21_ACTION_SCHEMA:
+                    resume_same_schema = True
+                    policies[role].load_state_dict(init["models"][role])
+                else:
+                    transfer_v2_latency_policy(policies[role], init["models"][role])
             else:
                 transfer_v1_look_policy(policies[role], init["models"][role])
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
@@ -788,7 +795,8 @@ def main():
     obs, bc_metrics = behavior_clone(
         policies[0], env, obs, seeds, device, cfg["bc_steps"], cfg["bc_epochs"],
         cfg["minibatch"], cfg["action_schema"], cfg["repeat"], cfg["bc_perturb"])
-    policies[1].load_state_dict(policies[0].state_dict())
+    if not resume_same_schema:
+        policies[1].load_state_dict(policies[0].state_dict())
     optimizers = [torch.optim.Adam(p.parameters(), lr=cfg["lr"], eps=1e-5)
                   for p in policies]
     # Preserve and score the behavioral-cloning initialization independently.
@@ -886,6 +894,15 @@ def main():
                                            (decision_obs[:, 1, 27] > 0.5)).sum())
             reward = env_tensor(reward, device)
             train_reward = reward.clone()
+            if is_iron_gear_schema(cfg["action_schema"]):
+                # Switching is legal but not free: in vanilla it resets attack
+                # charge and excessive toggling is fragile under latency. Reward
+                # the tactical event the axe exists for instead—disabling a shield.
+                switched = rows[:, :, 7].long() != decision_obs[:, :, 25].long()
+                train_reward -= cfg["weapon_switch_cost"] * switched.float()
+                disabled_opponent = ((next_obs[:, :, 30] > 0.5) &
+                                     (decision_obs[:, :, 30] <= 0.5))
+                train_reward += cfg["shield_disable_bonus"] * disabled_opponent.float()
             if chunk < cfg["bootstrap_chaser"]:
                 # Potential-based approach shaping solves the exploration problem
                 # without paying the agent merely for standing near its target.

@@ -157,12 +157,16 @@ class NetworkVecPvp:
             f32, f64, i64 = np.float32, np.float64, np.int64
         self._action_history = self._zeros(
             (self.HISTORY, self.n, N_PLAYERS, N_ACT), f64)
+        self._due_history = self._zeros(
+            (self.HISTORY, self.n, N_PLAYERS), i64)
         self._obs_history = self._zeros(
             (self.HISTORY, self.n, N_PLAYERS, N_OBS), f32)
         self._base_ping = self._zeros((self.n, N_PLAYERS), f32)
         self._phase = self._zeros((self.n, N_PLAYERS), f32)
         self._rate = self._zeros((self.n, N_PLAYERS), f32)
         self._steps = self._zeros((self.n, N_PLAYERS), i64)
+        self._last_due = self._zeros((self.n, N_PLAYERS), i64)
+        self._applied = self._zeros((self.n, N_PLAYERS, N_ACT), f64)
         self.obs = self._zeros((self.n, N_PLAYERS, N_NETWORK_OBS), f32)
         self._initialized = True
 
@@ -237,6 +241,9 @@ class NetworkVecPvp:
         self._rate[sel] = self._as_backend(rate[selected], self._rate.dtype)
         self._steps[sel] = 0
         self._action_history[:, sel] = 0
+        self._due_history[:, sel] = 0
+        self._last_due[sel] = 0
+        self._applied[sel] = 0
         for h in range(self.HISTORY):
             self._obs_history[h, sel] = raw_obs[sel]
         self._publish_observation(self._delays(self.current_ping_ms(), 2.7))
@@ -255,8 +262,20 @@ class NetworkVecPvp:
         self._action_history[self._cursor] = submitted
         ping = self.current_ping_ms()
         uplink = self._delays(ping, 0.3)
-        applied = self._gather_history(self._action_history, uplink)
-        raw_obs, reward, done, hits, damage = self.raw.step(applied, repeat=1)
+        due = self._steps + uplink
+        # Minecraft rides TCP: jitter may coalesce packets, but it cannot make a
+        # later hotbar/attack packet overtake an earlier packet from that client.
+        due = self.xp.maximum(due, self._last_due)
+        self._last_due[...] = due
+        self._due_history[self._cursor] = due
+        # Scan oldest to newest so all packets due this tick are consumed FIFO and
+        # the final (newest) state becomes the command applied by the server tick.
+        for age in reversed(range(self.HISTORY)):
+            index = (self._cursor - age) % self.HISTORY
+            ready = self._due_history[index] <= self._steps
+            self._applied[...] = self.xp.where(
+                ready[..., None], self._action_history[index], self._applied)
+        raw_obs, reward, done, hits, damage = self.raw.step(self._applied, repeat=1)
         self._obs_history[self._cursor] = raw_obs
         downlink = self._delays(ping, 2.7)
         self._publish_observation(downlink)

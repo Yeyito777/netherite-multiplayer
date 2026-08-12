@@ -13,7 +13,8 @@ from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCH
                             FINE_ACTION_SCHEMA, PITCH_LIMIT, Policy, YAW_LIMIT,
                             V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             checkpoint_action_schema, decode_actions, env_tensor,
-                            greedy_actions, is_continuous_schema, policy_input,
+                            greedy_actions, is_continuous_schema,
+                            is_iron_gear_schema, policy_input,
                             sample_actions)
 
 
@@ -111,7 +112,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                  (yaw_delta.abs() > 0.1) & (previous_yaw.abs() > 0.1) &
                  active_players).sum())
         previous_yaw = yaw_delta.clone()
-        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA):
+        if action_schema in (CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
+                             V21_ACTION_SCHEMA):
             pitch_delta = action_tensor[:, :, 3]
             pursuit["pitch_abs_sum"] += float(
                 (pitch_delta.abs() * active_players).sum())
@@ -127,7 +129,7 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                      (pitch_delta.abs() > 0.05) & (previous_pitch.abs() > 0.05) &
                      active_players).sum())
             previous_pitch = pitch_delta.clone()
-        if action_schema == V2_ACTION_SCHEMA:
+        if is_iron_gear_schema(action_schema):
             pursuit["axe_selected"] += int(
                 ((action_tensor[:, :, 7] == 1) & active_players).sum())
             pursuit["attack_intent"] += int(
