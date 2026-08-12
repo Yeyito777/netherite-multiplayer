@@ -92,6 +92,21 @@ The initial calibrated recipe is `PVP_ACTION_HOLD_PROB=0.10` and
 `PVP_EXTRA_REPEAT_PROB=0.02`. This is deliberately narrower than the worst-case
 trace and avoids hiding implementation defects behind broad randomization.
 
+## Corrected robust candidate: Pilot 21
+
+Pilot 21 was retrained from the same V1.2 look-policy initialization using the
+corrected cooldown rule and the calibrated 0.10 action-hold / 0.02 extra-tick
+recipe. Training plus periodic evaluation took about 6m25s on one L4 and produced
+approximately 31.5 million agent decisions.
+
+All 256 simulator fights complete in clean and perturbed native/swapped modes.
+A stochastic real-Minecraft gate completed in 344 decisions with 11/17 hits and
+a role-1 kill. Its measured cadence was **19.83 Hz**, p95 interval **52.41 ms**,
+exact one-tick transitions **99.71% / 99.42%**, same-world-tick application
+**97.67%**, and within-one-tick application **99.71%**. This run meets the cadence,
+p95, and within-one-tick gates; one role remains just below the strict 99% exact
+one-tick target across the full fight.
+
 ## Residual limitations
 
 - AI-vs-AI rendering clients are still independently phased; exact simultaneous

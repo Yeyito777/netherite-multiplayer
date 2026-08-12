@@ -8,5 +8,5 @@
 - [x] Fix avoidable deployment timing/action-semantic mismatches discovered by the baseline.
 - [x] Re-run parity gates and document residual sim-to-real mismatch.
 - [x] Add narrowly targeted training randomization/evaluation for measured residual delay/jitter.
-- [ ] Train and evaluate a corrected, deployment-randomized V2 candidate.
-- [ ] Run regression tests, commit, and push the parity campaign state.
+- [x] Train and evaluate a corrected, deployment-randomized V2 candidate.
+- [x] Run regression tests, commit, and push the parity campaign state.

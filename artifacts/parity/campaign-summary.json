@@ -1,0 +1,610 @@
+{
+  "barrier48_run": {
+    "action_schema": "iron_gear_20hz_v5",
+    "control_hz": 20,
+    "damage0": 20.0,
+    "damage1": 3.8572099999999985,
+    "deaths0": 0,
+    "deaths1": 1,
+    "decisions": 400,
+    "deployment_path": "realtime_client",
+    "hits0": 19,
+    "hits1": 2,
+    "measured_decisions_per_second": 19.591575616506027,
+    "ok": true,
+    "receipt": "artifacts/parity/barrier48/pilot20.jsonl",
+    "timing_summary": {
+      "action_world_tick_skew": {
+        "max_ticks": 2,
+        "p95_ticks": 1.0,
+        "same_tick_fraction": 0.6375,
+        "within_one_tick_fraction": 0.995
+      },
+      "client_rtt_ms": [
+        {
+          "max": 102.43875,
+          "mean": 38.90557077,
+          "p95": 52.12947374999999,
+          "p99": 70.45355136999999
+        },
+        {
+          "max": 127.298373,
+          "mean": 46.03031938,
+          "p95": 56.10997089999998,
+          "p99": 80.01838064999998
+        }
+      ],
+      "client_tick_delta": [
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9849624060150376,
+          "max": 3,
+          "min": 1,
+          "skipped": 6
+        },
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9899749373433584,
+          "max": 3,
+          "min": 1,
+          "skipped": 4
+        }
+      ],
+      "decision_interval_ms": {
+        "max": 128.095566,
+        "mean": 51.0451690651629,
+        "p50": 50.032226,
+        "p95": 59.146788799999996,
+        "p99": 86.22573679999988
+      },
+      "decisions": 400,
+      "effective_hz": 19.593761859384593
+    },
+    "timing_summary_path": "artifacts/parity/barrier48/pilot20.timing.json",
+    "wall_seconds": 20.41693878173828
+  },
+  "barrier48_timing": {
+    "action_world_tick_skew": {
+      "max_ticks": 2,
+      "p95_ticks": 1.0,
+      "same_tick_fraction": 0.6375,
+      "within_one_tick_fraction": 0.995
+    },
+    "client_rtt_ms": [
+      {
+        "max": 102.43875,
+        "mean": 38.90557077,
+        "p95": 52.12947374999999,
+        "p99": 70.45355136999999
+      },
+      {
+        "max": 127.298373,
+        "mean": 46.03031938,
+        "p95": 56.10997089999998,
+        "p99": 80.01838064999998
+      }
+    ],
+    "client_tick_delta": [
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9849624060150376,
+        "max": 3,
+        "min": 1,
+        "skipped": 6
+      },
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9899749373433584,
+        "max": 3,
+        "min": 1,
+        "skipped": 4
+      }
+    ],
+    "decision_interval_ms": {
+      "max": 128.095566,
+      "mean": 51.0451690651629,
+      "p50": 50.032226,
+      "p95": 59.146788799999996,
+      "p99": 86.22573679999988
+    },
+    "decisions": 400,
+    "effective_hz": 19.593761859384593
+  },
+  "baseline_run": {
+    "action_schema": "iron_gear_20hz_v5",
+    "control_hz": 20,
+    "damage0": 0.0,
+    "damage1": 20.000000000000004,
+    "deaths0": 1,
+    "deaths1": 0,
+    "decisions": 400,
+    "deployment_path": "realtime_client",
+    "hits0": 0,
+    "hits1": 16,
+    "measured_decisions_per_second": 19.371779333045048,
+    "ok": true,
+    "receipt": "artifacts/parity/baseline/pilot20.jsonl",
+    "timing_summary": {
+      "action_world_tick_skew": {
+        "max_ticks": 17,
+        "p95_ticks": 1.0,
+        "same_tick_fraction": 0.5625,
+        "within_one_tick_fraction": 0.9725
+      },
+      "client_rtt_ms": [
+        {
+          "max": 118.524129,
+          "mean": 43.344696205,
+          "p95": 55.58097979999998,
+          "p99": 101.08402966999998
+        },
+        {
+          "max": 165.632767,
+          "mean": 42.88383281750001,
+          "p95": 50.30991919999998,
+          "p99": 73.63176349999999
+        }
+      ],
+      "client_tick_delta": [
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9724310776942355,
+          "max": 3,
+          "min": 1,
+          "skipped": 11
+        },
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9824561403508771,
+          "max": 3,
+          "min": 1,
+          "skipped": 7
+        }
+      ],
+      "decision_interval_ms": {
+        "max": 190.72999,
+        "mean": 51.62475636842105,
+        "p50": 50.078542,
+        "p95": 61.48765449999997,
+        "p99": 102.05138989999995
+      },
+      "decisions": 400,
+      "effective_hz": 19.39521382264243
+    },
+    "timing_summary_path": "artifacts/parity/baseline/pilot20.timing.json",
+    "wall_seconds": 20.64859366416931
+  },
+  "baseline_timing": {
+    "action_world_tick_skew": {
+      "max_ticks": 17,
+      "p95_ticks": 1.0,
+      "same_tick_fraction": 0.5625,
+      "within_one_tick_fraction": 0.9725
+    },
+    "client_rtt_ms": [
+      {
+        "max": 118.524129,
+        "mean": 43.344696205,
+        "p95": 55.58097979999998,
+        "p99": 101.08402966999998
+      },
+      {
+        "max": 165.632767,
+        "mean": 42.88383281750001,
+        "p95": 50.30991919999998,
+        "p99": 73.63176349999999
+      }
+    ],
+    "client_tick_delta": [
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9724310776942355,
+        "max": 3,
+        "min": 1,
+        "skipped": 11
+      },
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9824561403508771,
+        "max": 3,
+        "min": 1,
+        "skipped": 7
+      }
+    ],
+    "decision_interval_ms": {
+      "max": 190.72999,
+      "mean": 51.62475636842105,
+      "p50": 50.078542,
+      "p95": 61.48765449999997,
+      "p99": 102.05138989999995
+    },
+    "decisions": 400,
+    "effective_hz": 19.39521382264243
+  },
+  "pilot20_corrected_eval": {
+    "action_schema": "iron_gear_20hz_v5",
+    "checkpoint": "artifacts/pilots/pilot20/selfplay.pt",
+    "greedy": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.033978213644806854,
+      "axe_selected_fraction": 0.1800129081006202,
+      "bearing_under_15_fraction": 0.997103548153512,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.3404354122721405,
+      "completed_fights": 256,
+      "damage_role0": 4644.122164726257,
+      "damage_role1": 3375.99556016922,
+      "draws": 0,
+      "episodes": 256,
+      "first_hit_role_samples": 499,
+      "forward_fraction": 0.9942070963070239,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1609,
+      "hits_role1": 1140,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.15955671693479834,
+      "mean_abs_bearing_error_deg": 3.9779204993682895,
+      "mean_abs_pitch_deg": 10.56306248101803,
+      "mean_abs_pitch_delta_deg": 1.829851186070376,
+      "mean_abs_pitch_variation_deg": 1.9103439858935232,
+      "mean_abs_yaw_delta_deg": 1.0813100346367395,
+      "mean_abs_yaw_variation_deg": 1.3060611918497596,
+      "mean_decisions_to_death": 248.1484375,
+      "mean_decisions_to_first_hit": 87.77354431152344,
+      "mean_distance_blocks": 4.847854001360006,
+      "mean_minecraft_ticks_to_death": 248.1484375,
+      "mean_minecraft_ticks_to_first_hit": 87.77354431152344,
+      "mode": "greedy",
+      "mutual_block_lane_fraction": 0.09019928848030728,
+      "near_wall_fraction": 0.005989673519503825,
+      "pitch_saturated_fraction": 0.0018024116109939237,
+      "pitch_sign_reversals_per_1000_player_steps": 244.82101816579038,
+      "policy_assignment": "native",
+      "repeat": 1,
+      "wins_role0": 200,
+      "wins_role1": 56,
+      "yaw_nonzero_fraction": 0.8470941032018386,
+      "yaw_saturated_fraction": 3.148317224443535e-05,
+      "yaw_sign_reversals_per_1000_player_steps": 246.2692440890344
+    },
+    "greedy_swapped": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.03230251537852488,
+      "axe_selected_fraction": 0.18089560874596505,
+      "bearing_under_15_fraction": 0.9971983677446861,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.34351970278336075,
+      "completed_fights": 256,
+      "damage_role0": 4182.2501702308655,
+      "damage_role1": 4145.8373918533325,
+      "draws": 0,
+      "episodes": 256,
+      "first_hit_role_samples": 506,
+      "forward_fraction": 0.9954854132407577,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1438,
+      "hits_role1": 1401,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.15259760034106828,
+      "mean_abs_bearing_error_deg": 3.8494045090912046,
+      "mean_abs_pitch_deg": 10.628818323452629,
+      "mean_abs_pitch_delta_deg": 1.80544805690638,
+      "mean_abs_pitch_variation_deg": 1.8323738155781595,
+      "mean_abs_yaw_delta_deg": 1.0496808540930709,
+      "mean_abs_yaw_variation_deg": 1.247758760132593,
+      "mean_decisions_to_death": 256.546875,
+      "mean_decisions_to_first_hit": 88.27667999267578,
+      "mean_distance_blocks": 4.797253400423152,
+      "mean_minecraft_ticks_to_death": 256.546875,
+      "mean_minecraft_ticks_to_first_hit": 88.27667999267578,
+      "mode": "greedy",
+      "mutual_block_lane_fraction": 0.08330288080881905,
+      "near_wall_fraction": 0.006501613983799257,
+      "pitch_saturated_fraction": 0.0018271514708569341,
+      "pitch_sign_reversals_per_1000_player_steps": 224.04683598270296,
+      "policy_assignment": "swapped",
+      "repeat": 1,
+      "wins_role0": 141,
+      "wins_role1": 115,
+      "yaw_nonzero_fraction": 0.8516048480419027,
+      "yaw_saturated_fraction": 3.0452524514282233e-05,
+      "yaw_sign_reversals_per_1000_player_steps": 242.7294597722151
+    },
+    "hybrid": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.03873277723410535,
+      "axe_selected_fraction": 0.1551874116532302,
+      "bearing_under_15_fraction": 0.9971340696211379,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.3173415971542632,
+      "completed_fights": 256,
+      "damage_role0": 4516.236489415169,
+      "damage_role1": 3738.420941591263,
+      "draws": 0,
+      "episodes": 256,
+      "first_hit_role_samples": 498,
+      "forward_fraction": 0.9913012411264893,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1604,
+      "hits_role1": 1300,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.13849666806468147,
+      "mean_abs_bearing_error_deg": 3.933867606632359,
+      "mean_abs_pitch_deg": 10.386276821285236,
+      "mean_abs_pitch_delta_deg": 1.8528828261274914,
+      "mean_abs_pitch_variation_deg": 1.9906978507422912,
+      "mean_abs_yaw_delta_deg": 1.0858536434049841,
+      "mean_abs_yaw_variation_deg": 1.288512135798522,
+      "mean_decisions_to_death": 251.47265625,
+      "mean_decisions_to_first_hit": 67.05421447753906,
+      "mean_distance_blocks": 4.957797970004355,
+      "mean_minecraft_ticks_to_death": 251.47265625,
+      "mean_minecraft_ticks_to_first_hit": 67.05421447753906,
+      "mode": "hybrid",
+      "mutual_block_lane_fraction": 0.06741538126970813,
+      "near_wall_fraction": 0.014974292060829179,
+      "pitch_saturated_fraction": 0.001405781567951287,
+      "pitch_sign_reversals_per_1000_player_steps": 261.6928406107771,
+      "policy_assignment": "native",
+      "repeat": 1,
+      "wins_role0": 160,
+      "wins_role1": 96,
+      "yaw_nonzero_fraction": 0.8650294359786881,
+      "yaw_saturated_fraction": 3.106699597682402e-05,
+      "yaw_sign_reversals_per_1000_player_steps": 253.94162511455954
+    },
+    "hybrid_swapped": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.035889556123488923,
+      "axe_selected_fraction": 0.16643409272644602,
+      "bearing_under_15_fraction": 0.997115037865128,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.33079853870396214,
+      "completed_fights": 256,
+      "damage_role0": 3606.2045996189117,
+      "damage_role1": 4399.306378364563,
+      "draws": 0,
+      "episodes": 256,
+      "first_hit_role_samples": 491,
+      "forward_fraction": 0.9953824926700011,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1239,
+      "hits_role1": 1523,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.1409711660577933,
+      "mean_abs_bearing_error_deg": 3.859074269449216,
+      "mean_abs_pitch_deg": 10.531206574511252,
+      "mean_abs_pitch_delta_deg": 1.8027103074875905,
+      "mean_abs_pitch_variation_deg": 1.8474584005024377,
+      "mean_abs_yaw_delta_deg": 1.0424823010818618,
+      "mean_abs_yaw_variation_deg": 1.2007276043617112,
+      "mean_decisions_to_death": 249.13671875,
+      "mean_decisions_to_first_hit": 74.9857406616211,
+      "mean_distance_blocks": 4.858388531321866,
+      "mean_minecraft_ticks_to_death": 249.13671875,
+      "mean_minecraft_ticks_to_first_hit": 74.9857406616211,
+      "mode": "hybrid",
+      "mutual_block_lane_fraction": 0.07124602141770803,
+      "near_wall_fraction": 0.013319431160726885,
+      "pitch_saturated_fraction": 0.0016149516298468148,
+      "pitch_sign_reversals_per_1000_player_steps": 228.49213691026827,
+      "policy_assignment": "swapped",
+      "repeat": 1,
+      "wins_role0": 96,
+      "wins_role1": 160,
+      "yaw_nonzero_fraction": 0.8605497107198294,
+      "yaw_saturated_fraction": 3.1358284074695435e-05,
+      "yaw_sign_reversals_per_1000_player_steps": 242.75231659323603
+    },
+    "repeat": 1,
+    "sampled": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.039082687338501294,
+      "axe_selected_fraction": 0.1577842377260982,
+      "bearing_under_15_fraction": 0.9967623354251262,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.32468161683277963,
+      "completed_fights": 256,
+      "damage_role0": 4518.00523519516,
+      "damage_role1": 3623.7676956653595,
+      "draws": 1,
+      "episodes": 256,
+      "first_hit_role_samples": 497,
+      "forward_fraction": 0.9896794635166728,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1614,
+      "hits_role1": 1270,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.1407961117263443,
+      "mean_abs_bearing_error_deg": 4.2507802918525845,
+      "mean_abs_pitch_deg": 10.478895282633882,
+      "mean_abs_pitch_delta_deg": 2.661279163362649,
+      "mean_abs_pitch_variation_deg": 3.9362966270959876,
+      "mean_abs_yaw_delta_deg": 3.1738934580970546,
+      "mean_abs_yaw_variation_deg": 5.177317619074369,
+      "mean_decisions_to_death": 253.96875,
+      "mean_decisions_to_first_hit": 63.48692321777344,
+      "mean_distance_blocks": 4.909701738485012,
+      "mean_minecraft_ticks_to_death": 253.96875,
+      "mean_minecraft_ticks_to_first_hit": 63.48692321777344,
+      "mode": "sampled",
+      "mutual_block_lane_fraction": 0.06479943398548049,
+      "near_wall_fraction": 0.012435400516795866,
+      "pitch_saturated_fraction": 0.002299433985480497,
+      "pitch_sign_reversals_per_1000_player_steps": 555.4863418235511,
+      "policy_assignment": "native",
+      "repeat": 1,
+      "wins_role0": 158,
+      "wins_role1": 97,
+      "yaw_nonzero_fraction": 0.9787283130306386,
+      "yaw_saturated_fraction": 0.0001461178786760182,
+      "yaw_sign_reversals_per_1000_player_steps": 599.1140642303433
+    },
+    "sampled_swapped": {
+      "action_schema": "iron_gear_20hz_v5",
+      "attack_intent_fraction": 0.03559482879322951,
+      "axe_selected_fraction": 0.17343144728449417,
+      "bearing_under_15_fraction": 0.9967329921125095,
+      "behind_fraction": 0.0,
+      "block_intent_fraction": 0.3462172715816985,
+      "completed_fights": 256,
+      "damage_role0": 3360.1311066150665,
+      "damage_role1": 4435.651318788528,
+      "draws": 1,
+      "episodes": 256,
+      "first_hit_role_samples": 483,
+      "forward_fraction": 0.9943294077381415,
+      "forward_while_behind_fraction": 0.0,
+      "forward_while_behind_player_fraction": 0.0,
+      "hits_role0": 1165,
+      "hits_role1": 1554,
+      "horizon_decisions": 1200,
+      "horizon_draws": 0,
+      "inside_reach_fraction": 0.15039126308747802,
+      "mean_abs_bearing_error_deg": 4.185213891413044,
+      "mean_abs_pitch_deg": 10.666599269193604,
+      "mean_abs_pitch_delta_deg": 2.608126478482536,
+      "mean_abs_pitch_variation_deg": 3.8076671662556736,
+      "mean_abs_yaw_delta_deg": 3.1241876684855647,
+      "mean_abs_yaw_variation_deg": 5.061058652835123,
+      "mean_decisions_to_death": 251.08984375,
+      "mean_decisions_to_first_hit": 71.06417846679688,
+      "mean_distance_blocks": 4.784046279536344,
+      "mean_minecraft_ticks_to_death": 251.08984375,
+      "mean_minecraft_ticks_to_first_hit": 71.06417846679688,
+      "mode": "sampled",
+      "mutual_block_lane_fraction": 0.07419219340686693,
+      "near_wall_fraction": 0.011380077474758474,
+      "pitch_saturated_fraction": 0.003080321722491016,
+      "pitch_sign_reversals_per_1000_player_steps": 545.022480125702,
+      "policy_assignment": "swapped",
+      "repeat": 1,
+      "wins_role0": 96,
+      "wins_role1": 159,
+      "yaw_nonzero_fraction": 0.9790211422081861,
+      "yaw_saturated_fraction": 0.00013223603354128098,
+      "yaw_sign_reversals_per_1000_player_steps": 591.8807075405654
+    }
+  },
+  "pilot21_real_run": {
+    "action_schema": "iron_gear_20hz_v5",
+    "control_hz": 20,
+    "damage0": 11.455179,
+    "damage1": 20.0,
+    "deaths0": 1,
+    "deaths1": 0,
+    "decisions": 344,
+    "deployment_path": "realtime_client",
+    "hits0": 11,
+    "hits1": 17,
+    "measured_decisions_per_second": 19.828588078494263,
+    "ok": true,
+    "receipt": "artifacts/parity/pilot21-real/match.jsonl",
+    "timing_summary": {
+      "action_world_tick_skew": {
+        "max_ticks": 2,
+        "p95_ticks": 0.0,
+        "same_tick_fraction": 0.9767441860465116,
+        "within_one_tick_fraction": 0.997093023255814
+      },
+      "client_rtt_ms": [
+        {
+          "max": 99.612127,
+          "mean": 46.73418187790698,
+          "p95": 48.7310489,
+          "p99": 51.898859089999995
+        },
+        {
+          "max": 111.0586,
+          "mean": 47.17069952325582,
+          "p95": 48.605316699999996,
+          "p99": 66.81349148
+        }
+      ],
+      "client_tick_delta": [
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9970845481049563,
+          "max": 3,
+          "min": 1,
+          "skipped": 1
+        },
+        {
+          "duplicated_or_reordered": 0,
+          "exactly_one_fraction": 0.9941690962099126,
+          "max": 2,
+          "min": 1,
+          "skipped": 2
+        }
+      ],
+      "decision_interval_ms": {
+        "max": 115.135893,
+        "mean": 50.43044443731778,
+        "p50": 50.004756,
+        "p95": 52.40591069999999,
+        "p99": 71.27202837999994
+      },
+      "decisions": 344,
+      "effective_hz": 19.833659317416792
+    },
+    "timing_summary_path": "artifacts/parity/pilot21-real/match.timing.json",
+    "wall_seconds": 17.34868860244751
+  },
+  "pilot21_real_timing": {
+    "action_world_tick_skew": {
+      "max_ticks": 2,
+      "p95_ticks": 0.0,
+      "same_tick_fraction": 0.9767441860465116,
+      "within_one_tick_fraction": 0.997093023255814
+    },
+    "client_rtt_ms": [
+      {
+        "max": 99.612127,
+        "mean": 46.73418187790698,
+        "p95": 48.7310489,
+        "p99": 51.898859089999995
+      },
+      {
+        "max": 111.0586,
+        "mean": 47.17069952325582,
+        "p95": 48.605316699999996,
+        "p99": 66.81349148
+      }
+    ],
+    "client_tick_delta": [
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9970845481049563,
+        "max": 3,
+        "min": 1,
+        "skipped": 1
+      },
+      {
+        "duplicated_or_reordered": 0,
+        "exactly_one_fraction": 0.9941690962099126,
+        "max": 2,
+        "min": 1,
+        "skipped": 2
+      }
+    ],
+    "decision_interval_ms": {
+      "max": 115.135893,
+      "mean": 50.43044443731778,
+      "p50": 50.004756,
+      "p95": 52.40591069999999,
+      "p99": 71.27202837999994
+    },
+    "decisions": 344,
+    "effective_hz": 19.833659317416792
+  }
+}
