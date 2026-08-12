@@ -68,3 +68,14 @@ def test_pvp_reset_clears_stale_visibility_and_deployment_gates_both_views():
     deploy = (ROOT.parents[2] / "deploy_pvp_checkpoint.py").read_text()
     assert "wait_for_mutual_visibility(pool)" in deploy
     assert "real-client mutual-visibility preflight failed" in deploy
+
+
+def test_deployment_observation_exposes_parity_clocks():
+    recorder = (JAVA / "netheritemod" / "Recorder.java").read_text()
+    for field in ("client_tick", "world_tick", "action_apply_client_tick",
+                  "action_apply_world_tick", "action_apply_nano_time"):
+        assert f'"{field}"' in recorder
+    deploy = (ROOT.parents[2] / "deploy_pvp_checkpoint.py").read_text()
+    assert "def timing_summary(rows):" in deploy
+    assert '"same_tick_fraction"' in deploy
+    assert '"exactly_one_fraction"' in deploy

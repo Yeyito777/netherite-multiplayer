@@ -19,7 +19,8 @@ from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCH
 
 @torch.no_grad()
 def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
-        swap_policies=False, deterministic_yaw=False):
+        swap_policies=False, deterministic_yaw=False, action_hold_prob=0.0,
+        extra_repeat_prob=0.0):
     torch.manual_seed(seed)
     device = torch.device("cpu")
     policies = [Policy(action_schema=action_schema).eval(),
@@ -51,6 +52,7 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
     previous_yaw = None
     previous_pitch = None
     first_hit = torch.full((episodes, 2), -1, dtype=torch.int64)
+    previous_rows = torch.zeros((episodes, 2, N_ACT), dtype=torch.float64)
     for step in range(horizon):
         actions = []
         for role in range(2):
@@ -134,7 +136,14 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                 ((obs[:, 0, 27] > 0.5) & (obs[:, 1, 27] > 0.5) & active).sum())
         pursuit["distance_sum"] += float(distance[active_players].sum())
         rows = decode_actions(action_tensor, device, action_schema)
-        obs, reward, done, hs, dmg = env.step(rows, repeat=repeat)
+        executed_rows = rows
+        if action_hold_prob > 0.0:
+            hold = torch.rand((episodes, 2)) < action_hold_prob
+            executed_rows = torch.where(hold[:, :, None], previous_rows, rows)
+        previous_rows = rows.clone()
+        step_repeat = repeat + int(extra_repeat_prob > 0.0 and
+                                   float(torch.rand(())) < extra_repeat_prob)
+        obs, reward, done, hs, dmg = env.step(executed_rows, repeat=step_repeat)
         obs = env_tensor(obs, device)
         active_hits = env_tensor(hs, device)[active]
         active_damage = env_tensor(dmg, device)[active]
@@ -166,6 +175,8 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
                  "sampled" if stochastic else "greedy"),
         "policy_assignment": "swapped" if swap_policies else "native",
         "action_schema": action_schema,
+        "action_hold_prob": action_hold_prob,
+        "extra_repeat_prob": extra_repeat_prob,
         "episodes": episodes, "horizon_decisions": horizon, "repeat": repeat,
         "wins_role0": wins[0], "wins_role1": wins[1], "draws": draws,
         "horizon_draws": horizon_draws,
@@ -221,34 +232,40 @@ def main():
     ap.add_argument("--seed", type=int, default=700000)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--include-role-swapped", action="store_true")
+    ap.add_argument("--action-hold-prob", type=float, default=0.0,
+                    help="independently execute each role's prior action")
+    ap.add_argument("--extra-repeat-prob", type=float, default=0.0,
+                    help="probability a decision spans one additional env tick")
     args = ap.parse_args()
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = ck.get("config", {})
     action_schema = checkpoint_action_schema(config)
     repeat = args.repeat if args.repeat is not None else int(config.get("repeat", 4))
+    domain = {"action_hold_prob": args.action_hold_prob,
+              "extra_repeat_prob": args.extra_repeat_prob}
     result = {
         "checkpoint": str(args.checkpoint),
         "action_schema": action_schema, "repeat": repeat,
         "greedy": run(ck, args.episodes, args.horizon, repeat, False, args.seed,
-                      action_schema),
+                      action_schema, **domain),
         "sampled": run(ck, args.episodes, args.horizon, repeat, True, args.seed,
-                       action_schema),
+                       action_schema, **domain),
     }
     if args.include_role_swapped:
         result["greedy_swapped"] = run(
             ck, args.episodes, args.horizon, repeat, False, args.seed,
-            action_schema, swap_policies=True)
+            action_schema, swap_policies=True, **domain)
         result["sampled_swapped"] = run(
             ck, args.episodes, args.horizon, repeat, True, args.seed,
-            action_schema, swap_policies=True)
+            action_schema, swap_policies=True, **domain)
     if is_continuous_schema(action_schema):
         result["hybrid"] = run(
             ck, args.episodes, args.horizon, repeat, True, args.seed,
-            action_schema, deterministic_yaw=True)
+            action_schema, deterministic_yaw=True, **domain)
         if args.include_role_swapped:
             result["hybrid_swapped"] = run(
                 ck, args.episodes, args.horizon, repeat, True, args.seed,
-                action_schema, swap_policies=True, deterministic_yaw=True)
+                action_schema, swap_policies=True, deterministic_yaw=True, **domain)
     text = json.dumps(result, indent=2, sort_keys=True)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

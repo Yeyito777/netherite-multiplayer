@@ -138,6 +138,12 @@ public class Recorder {
     // once per socket step and records the digest in its result artifact.
     private long rlPolicyActionSeq = 0L;
     private long rlPolicyActionFnv = 0xcbf29ce484222325L;
+    // Deployment parity clocks. rlClientTick advances exactly once per
+    // ClientTickEvent.END, independent of player respawns/ticksExisted.
+    private long rlClientTick = 0L;
+    private long rlLastActionClientTick = -1L;
+    private long rlLastActionWorldTick = -1L;
+    private long rlLastActionNanoTime = -1L;
     private int rlContainer = 0;            // 0 none/2x2, 1 table, 2 furnace
     private BlockPos rlContainerPos = null;
     /** inv_counts item ids (rl_mode.c rl_inv_ids): log, planks, stick,
@@ -1277,6 +1283,7 @@ public class Recorder {
         }
         if (e.phase != TickEvent.Phase.END) return;
         Minecraft mc = Minecraft.getMinecraft();
+        ++rlClientTick;
         mc.gameSettings.pauseOnLostFocus = false; // headless window never has focus; keep the server ticking
         // Keep limb swing zeroed while pinned so any path that samples between
         // ticks (not only RenderPlayer) still sees a parked idle pose.
@@ -1379,7 +1386,7 @@ public class Recorder {
                 // 25 ms apart.  Keep the fast client at this barrier long enough
                 // for Python to receive the slow client's observation, infer both
                 // actions, and submit the pair without dropping a game tick.
-                ? incoming.poll(40, java.util.concurrent.TimeUnit.MILLISECONDS)
+                ? incoming.poll(48, java.util.concurrent.TimeUnit.MILLISECONDS)
                 : incoming.poll();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
@@ -5060,6 +5067,10 @@ sb.append("}");
 
     private void applyAction(Minecraft mc, JsonObject a) {
         EntityPlayerSP p = mc.player;
+        rlLastActionClientTick = rlClientTick;
+        rlLastActionNanoTime = System.nanoTime();
+        try { rlLastActionWorldTick = mc.world.getTotalWorldTime(); }
+        catch (Throwable ig) { rlLastActionWorldTick = -1L; }
         key(mc.gameSettings.keyBindForward, bit(a, "forward"));
         key(mc.gameSettings.keyBindBack,    bit(a, "back"));
         key(mc.gameSettings.keyBindLeft,    bit(a, "left"));
@@ -6415,6 +6426,13 @@ sb.append("}");
         o.addProperty("policy_action_seq", rlPolicyActionSeq);
         o.addProperty("policy_action_fnv64",
                       Long.toUnsignedString(rlPolicyActionFnv, 16));
+        o.addProperty("client_tick", rlClientTick);
+        o.addProperty("player_tick", p.ticksExisted);
+        o.addProperty("action_apply_client_tick", rlLastActionClientTick);
+        o.addProperty("action_apply_world_tick", rlLastActionWorldTick);
+        o.addProperty("action_apply_nano_time", rlLastActionNanoTime);
+        try { o.addProperty("world_tick", mc.world.getTotalWorldTime()); }
+        catch (Throwable ig) { o.addProperty("world_tick", -1L); }
         try {
             o.addProperty("world_seed", mc.getIntegratedServer().worlds[0].getSeed());
             o.addProperty("save_folder", mc.getIntegratedServer().getFolderName());

@@ -436,7 +436,13 @@ MC_HD static inline PvpStepResult pvp_match_step(PvpMatch *m,
                                   &action[1], 0, &m->rng);
     for (i = 0; i < 2; ++i) {
         r.attempted[i] = intent[i].attempted;
-        if (intent[i].attempted) m->player[i].ticks_since_attack = 0;
+        /* Vanilla 1.11.2 resets the attack-strength ticker in
+         * attackTargetEntityWithCurrentItem, not for a left-click that raycasts
+         * only air. The real bridge likewise calls attackEntity only after an
+         * entity hit. Resetting on every policy attack intent made training see
+         * near-zero cooldown while deployment correctly remained fully cooled
+         * during pursuit. */
+        if (intent[i].in_reach) m->player[i].ticks_since_attack = 0;
     }
 
     /* Both intents were captured from the same pre-damage state. */

@@ -681,6 +681,10 @@ def main():
         "bootstrap_static": int(os.environ.get("PVP_BOOTSTRAP_STATIC", "10")),
         "bootstrap_chaser": int(os.environ.get("PVP_BOOTSTRAP_CHASER", "20")),
         "approach_reward": float(os.environ.get("PVP_APPROACH_REWARD", "0.1")),
+        # Opt-in deployment-domain randomization, calibrated from the measured
+        # real-client timing report rather than broad arbitrary perturbations.
+        "action_hold_prob": float(os.environ.get("PVP_ACTION_HOLD_PROB", "0")),
+        "extra_repeat_prob": float(os.environ.get("PVP_EXTRA_REPEAT_PROB", "0")),
         "bc_steps": int(os.environ.get("PVP_BC_STEPS", "64")),
         "bc_epochs": int(os.environ.get("PVP_BC_EPOCHS", "4")),
         "bc_perturb": float(os.environ.get(
@@ -757,6 +761,8 @@ def main():
     with metrics_path.open("a") as f:
         f.write(json.dumps(bc_row, sort_keys=True) + "\n")
     global_decisions = 0
+    previous_rows = torch.zeros((cfg["n"], 2, N_ACT),
+                                dtype=torch.float64, device=device)
 
     print(json.dumps({"device": str(device), **cfg, **bc_metrics}, sort_keys=True),
           flush=True)
@@ -777,6 +783,8 @@ def main():
                        for name in ("axe", "attack", "block_intent",
                                     "blocking", "switch", "shield_disable")}
         mutual_block_ticks = 0
+        chunk_held_actions = 0
+        chunk_extra_repeats = 0
         for _ in range(cfg["rollout"]):
             with torch.no_grad():
                 role_out = []
@@ -799,7 +807,22 @@ def main():
             # that produced this action *before* env.step overwrites that buffer;
             # pairing actions/log-probs with the next state creates a fake PPO KL.
             decision_obs = obs.clone()
-            next_obs, reward, done, hits, damage = env.step(rows, repeat=cfg["repeat"])
+            executed_rows = rows
+            if cfg["action_hold_prob"] > 0.0:
+                hold = (torch.rand((cfg["n"], 2), device=device) <
+                        cfg["action_hold_prob"])
+                executed_rows = torch.where(hold[:, :, None], previous_rows, rows)
+                chunk_held_actions += int(hold.sum())
+            # The newly selected action is what persists if the following real
+            # client command misses its tick window.
+            previous_rows = rows.clone()
+            step_repeat = cfg["repeat"]
+            if (cfg["extra_repeat_prob"] > 0.0 and
+                    float(torch.rand((), device=device)) < cfg["extra_repeat_prob"]):
+                step_repeat += 1
+                chunk_extra_repeats += 1
+            next_obs, reward, done, hits, damage = env.step(
+                executed_rows, repeat=step_repeat)
             next_obs = env_tensor(next_obs, device)
             if cfg["action_schema"] == V2_ACTION_SCHEMA:
                 gear_counts["axe"] += (rows[:, :, 7] > 0.5).sum(0)
@@ -838,6 +861,7 @@ def main():
                 mask = done_t.cpu().numpy().astype(np.uint8)
                 seeds[mask.astype(bool)] += np.uint64(cfg["n"] * 1000 + chunk + 1)
                 env.reset(seeds, mask)
+                previous_rows[done_t] = 0.0
                 next_obs = env_tensor(env.obs, device)
             obs = next_obs
             global_decisions += cfg["n"] * 2
@@ -957,6 +981,9 @@ def main():
                "damage_per_second": float(chunk_damage.sum()) / elapsed,
                "kills_role0": int(kills[0]), "kills_role1": int(kills[1]),
                "draws": draws, **losses}
+        row["action_hold_fraction"] = (
+            chunk_held_actions / max(1, cfg["n"] * 2 * cfg["rollout"]))
+        row["extra_repeat_fraction"] = chunk_extra_repeats / max(1, cfg["rollout"])
         if cfg["action_schema"] == V2_ACTION_SCHEMA:
             denom = max(1, cfg["n"] * cfg["rollout"])
             for name, counts in gear_counts.items():

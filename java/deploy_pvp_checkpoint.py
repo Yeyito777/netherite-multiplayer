@@ -13,6 +13,7 @@ from pathlib import Path
 import socket
 import struct
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,6 +45,46 @@ def bridge(port, message, timeout=30):
     if not out.get("ok"):
         raise RuntimeError(f"bridge {port}: {out}")
     return out
+
+
+def timed_bridge(port, message, timeout=30):
+    """Bridge call plus host-monotonic transport timestamps for parity traces."""
+    sent_ns = time.monotonic_ns()
+    out = bridge(port, message, timeout=timeout)
+    received_ns = time.monotonic_ns()
+    return out, {"sent_ns": sent_ns, "received_ns": received_ns,
+                 "rtt_ms": (received_ns - sent_ns) / 1e6}
+
+
+class PersistentBridge:
+    """One long-lived qrl connection; avoids a TCP accept/close per game tick."""
+    def __init__(self, port, timeout=30):
+        self.port = port
+        self.sock = socket.create_connection(("127.0.0.1", port), 5)
+        self.sock.settimeout(timeout)
+        self.stream = self.sock.makefile("rwb")
+        self.lock = threading.Lock()
+
+    def call(self, message):
+        with self.lock:
+            sent_ns = time.monotonic_ns()
+            self.stream.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
+            self.stream.flush()
+            line = self.stream.readline()
+            received_ns = time.monotonic_ns()
+        if not line:
+            raise RuntimeError(f"persistent bridge {self.port} closed without a response")
+        out = json.loads(line)
+        if not out.get("ok"):
+            raise RuntimeError(f"persistent bridge {self.port}: {out}")
+        return out, {"sent_ns": sent_ns, "received_ns": received_ns,
+                     "rtt_ms": (received_ns - sent_ns) / 1e6}
+
+    def close(self):
+        try:
+            self.stream.close()
+        finally:
+            self.sock.close()
 
 
 def f64(bits):
@@ -177,6 +218,63 @@ def decode_client_player(row):
         "shield_use_ticks": int(row.get("shield_use_ticks", 0)),
         "shield_disabled": bool(row.get("shield_disabled", False)),
         "shield_damage": int(row.get("shield_damage", 0)),
+        "client_tick": int(row.get("client_tick", -1)),
+        "world_tick": int(row.get("world_tick", -1)),
+        "action_apply_client_tick": int(row.get("action_apply_client_tick", -1)),
+        "action_apply_world_tick": int(row.get("action_apply_world_tick", -1)),
+        "action_apply_nano_time": int(row.get("action_apply_nano_time", -1)),
+    }
+
+
+def timing_summary(rows):
+    """Summarize observed action cadence and two-client phase parity."""
+    if not rows:
+        return {"decisions": 0}
+
+    def percentile(values, q):
+        return float(np.percentile(np.asarray(values, dtype=np.float64), q)) \
+            if values else None
+
+    starts = [row["decision_started_ns"] for row in rows]
+    intervals = [(b - a) / 1e6 for a, b in zip(starts, starts[1:])]
+    rtts = [[row["clients"][role]["rtt_ms"] for row in rows]
+            for role in range(2)]
+    client_ticks = [[row["clients"][role]["client_tick"] for row in rows]
+                    for role in range(2)]
+    world_ticks = [[row["clients"][role]["action_apply_world_tick"] for row in rows]
+                   for role in range(2)]
+    client_deltas = [[b - a for a, b in zip(ticks, ticks[1:])]
+                     for ticks in client_ticks]
+    world_skew = [abs(row["clients"][0]["action_apply_world_tick"] -
+                      row["clients"][1]["action_apply_world_tick"])
+                  for row in rows
+                  if min(row["clients"][0]["action_apply_world_tick"],
+                         row["clients"][1]["action_apply_world_tick"]) >= 0]
+    elapsed_s = ((max(row["clients"][r]["received_ns"] for row in rows for r in range(2)) -
+                  min(row["clients"][r]["sent_ns"] for row in rows for r in range(2))) / 1e9)
+    return {
+        "decisions": len(rows),
+        "effective_hz": len(rows) / max(elapsed_s, 1e-9),
+        "decision_interval_ms": {
+            "mean": float(np.mean(intervals)) if intervals else None,
+            "p50": percentile(intervals, 50), "p95": percentile(intervals, 95),
+            "p99": percentile(intervals, 99), "max": max(intervals) if intervals else None,
+        },
+        "client_rtt_ms": [{"mean": float(np.mean(x)), "p95": percentile(x, 95),
+                           "p99": percentile(x, 99), "max": max(x)} for x in rtts],
+        "client_tick_delta": [{
+            "min": min(x) if x else None, "max": max(x) if x else None,
+            "exactly_one_fraction": (sum(v == 1 for v in x) / len(x)) if x else None,
+            "skipped": sum(v > 1 for v in x), "duplicated_or_reordered": sum(v <= 0 for v in x),
+        } for x in client_deltas],
+        "action_world_tick_skew": {
+            "same_tick_fraction": (sum(v == 0 for v in world_skew) / len(world_skew)
+                                   if world_skew else None),
+            "within_one_tick_fraction": (sum(v <= 1 for v in world_skew) / len(world_skew)
+                                         if world_skew else None),
+            "p95_ticks": percentile(world_skew, 95),
+            "max_ticks": max(world_skew) if world_skew else None,
+        },
     }
 
 
@@ -256,6 +354,8 @@ def main():
                         help="when paired with --ready-file, wait for this file before fighting")
     parser.add_argument("--out", type=Path,
                         default=ROOT / "artifacts/java_pvp_deployment.jsonl")
+    parser.add_argument("--timing-summary", type=Path,
+                        help="defaults beside --out with suffix .timing.json")
     args = parser.parse_args()
     if (args.ready_file is None) != (args.start_file is None):
         parser.error("--ready-file and --start-file must be used together")
@@ -298,6 +398,7 @@ def main():
     totals = {"hits0": 0, "hits1": 0, "damage0": 0.0, "damage1": 0.0,
               "deaths0": 0, "deaths1": 0}
     completed_decisions = 0
+    timing_rows = []
     with args.out.open("w") as receipt, ThreadPoolExecutor(max_workers=2) as pool:
         # pvp_setup teleports both players and invalidates a large part of each
         # render view. Recording immediately used to catch chunk rebuild and JVM
@@ -321,10 +422,14 @@ def main():
                 time.sleep(0.005)
         started = time.time()
         client_players = None
+        persistent = None
         if args.realtime_client_path:
             client_players = [decode_client_player(row) for row in visible_rows]
-        for decision in range(args.decisions):
+            persistent = [PersistentBridge(25575 + role) for role in range(2)]
+        try:
+          for decision in range(args.decisions):
             if args.realtime_client_path:
+                decision_started_ns = time.monotonic_ns()
                 players = client_players
                 raw = [policy_action(
                            policies[r], observation(players, r, legacy=legacy_observation),
@@ -332,11 +437,24 @@ def main():
                            args.sample_continuous_yaw,
                            args.sample_continuous_pitch)
                        for r in range(2)]
-                futures = [pool.submit(bridge, 25575 + r,
+                futures = [pool.submit(persistent[r].call,
                                        {"cmd": "step", "action":
                                         client_action(raw[r], client_attack=True)})
                            for r in range(2)]
-                next_players = [decode_client_player(f.result()) for f in futures]
+                results = [f.result() for f in futures]
+                next_players = [decode_client_player(result[0]) for result in results]
+                client_timing = []
+                for role, (raw_obs, transport) in enumerate(results):
+                    client_timing.append({**transport,
+                        "client_tick": int(raw_obs.get("client_tick", -1)),
+                        "world_tick": int(raw_obs.get("world_tick", -1)),
+                        "action_apply_client_tick": int(raw_obs.get("action_apply_client_tick", -1)),
+                        "action_apply_world_tick": int(raw_obs.get("action_apply_world_tick", -1)),
+                        "policy_action_seq": int(raw_obs.get("policy_action_seq", -1))})
+                timing_row = {"decision": decision,
+                              "decision_started_ns": decision_started_ns,
+                              "clients": client_timing}
+                timing_rows.append(timing_row)
                 killed_role = next((r for r in range(2)
                                     if next_players[r]["deaths"] > players[r]["deaths"]), None)
                 for attacker in range(2):
@@ -354,6 +472,7 @@ def main():
                     "actions": raw, "terminal": killed_role is not None,
                     "killed_role": killed_role,
                     "policy_action_seq": [p["policy_action_seq"] for p in next_players],
+                    "timing": timing_row,
                     "path": "realtime_client", **totals,
                 }
                 receipt.write(json.dumps(row, sort_keys=True) + "\n")
@@ -417,7 +536,15 @@ def main():
                 break
             if repeat_seconds > 0.0:
                 time.sleep(repeat_seconds)
+        finally:
+            if persistent is not None:
+                for client in persistent:
+                    client.close()
     elapsed = time.time() - started
+    parity = timing_summary(timing_rows) if args.realtime_client_path else None
+    timing_path = args.timing_summary or args.out.with_suffix(".timing.json")
+    if parity is not None:
+        timing_path.write_text(json.dumps(parity, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"ok": True, "decisions": completed_decisions, **totals,
                       "action_schema": action_schema,
                       "deployment_path": ("realtime_client" if args.realtime_client_path
@@ -425,6 +552,8 @@ def main():
                       "control_hz": config.get("control_hz", 5),
                       "wall_seconds": elapsed,
                       "measured_decisions_per_second": completed_decisions / max(elapsed, 1e-9),
+                      "timing_summary": parity,
+                      "timing_summary_path": str(timing_path) if parity is not None else None,
                       "receipt": str(args.out)}, sort_keys=True))
 
 
