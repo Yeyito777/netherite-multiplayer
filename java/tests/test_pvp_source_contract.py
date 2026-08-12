@@ -57,3 +57,14 @@ def test_v2_setup_equips_fixed_iron_gear_and_observes_shield_state():
     assert '"blocking"' in text
     assert '"shield_disabled"' in text
     assert '"shield_use_ticks"' in text
+
+
+def test_pvp_reset_clears_stale_visibility_and_deployment_gates_both_views():
+    recorder = (JAVA / "netheritemod" / "Recorder.java").read_text()
+    for reset in ("clearActivePotions()", "setInvisible(false)",
+                  "setGameType(net.minecraft.world.GameType.SURVIVAL)"):
+        assert reset in recorder
+    assert '"invisible_to_viewer"' in recorder
+    deploy = (ROOT.parents[2] / "deploy_pvp_checkpoint.py").read_text()
+    assert "wait_for_mutual_visibility(pool)" in deploy
+    assert "real-client mutual-visibility preflight failed" in deploy

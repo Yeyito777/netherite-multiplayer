@@ -192,6 +192,39 @@ def client_action(raw, client_attack=False):
             "use": block, "hotbar": weapon}
 
 
+def remote_player_visibility(row):
+    """Return visible remote players from one real client's render-world obs."""
+    return [entity for entity in row.get("entities", [])
+            if "Player" in entity.get("type", "")
+            and not entity.get("dead", False)
+            and not entity.get("invisible", False)
+            and not entity.get("invisible_to_viewer", False)]
+
+
+def wait_for_mutual_visibility(pool, timeout=10.0):
+    """Gate capture/deployment until both clients can actually render the rival.
+
+    Server presence is insufficient: a stale client entity flag or a delayed
+    spawn packet can otherwise produce a valid fight and a one-sided empty video.
+    """
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        futures = [pool.submit(bridge, 25575 + role, {"cmd": "obs"})
+                   for role in range(2)]
+        last = [future.result() for future in futures]
+        if all(remote_player_visibility(row) for row in last):
+            return last
+        time.sleep(0.05)
+    diagnostics = [{
+        "entity_count": row.get("entity_count"),
+        "players": [entity for entity in row.get("entities", [])
+                    if "Player" in entity.get("type", "")],
+    } for row in (last or [{}, {}])]
+    raise RuntimeError("real-client mutual-visibility preflight failed: "
+                       + json.dumps(diagnostics, sort_keys=True))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path,
@@ -277,6 +310,10 @@ def main():
                     for r in range(2)]
             for future in warm:
                 future.result()
+        # This is a deployment correctness gate, not just a video convenience:
+        # both policies may keep fighting through server state even if one remote
+        # player has failed to materialize in a client's render world.
+        visible_rows = wait_for_mutual_visibility(pool)
         if args.ready_file is not None:
             args.ready_file.parent.mkdir(parents=True, exist_ok=True)
             args.ready_file.touch()
@@ -285,9 +322,7 @@ def main():
         started = time.time()
         client_players = None
         if args.realtime_client_path:
-            initial = [pool.submit(bridge, 25575 + r, {"cmd": "obs"})
-                       for r in range(2)]
-            client_players = [decode_client_player(f.result()) for f in initial]
+            client_players = [decode_client_player(row) for row in visible_rows]
         for decision in range(args.decisions):
             if args.realtime_client_path:
                 players = client_players

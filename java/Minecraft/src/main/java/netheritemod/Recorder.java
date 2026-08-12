@@ -741,6 +741,21 @@ public class Recorder {
 
     private static void pvpResetPlayer(net.minecraft.entity.player.EntityPlayerMP p,
                                        double x, double y, double z, float yaw) {
+        // A reused integrated-server profile can retain potion/entity flags from
+        // an earlier oracle scenario.  In particular, an old invisibility flag
+        // made one remote fighter exist (and take damage) without being rendered
+        // by the other client.  A match reset must reset visual/game-mode state,
+        // not only combat inventory and health.
+        p.clearActivePotions();
+        p.setInvisible(false);
+        p.setGlowing(false);
+        p.setSneaking(false);
+        p.setSprinting(false);
+        p.setGameType(net.minecraft.world.GameType.SURVIVAL);
+        p.capabilities.isFlying = false;
+        p.capabilities.allowFlying = false;
+        p.capabilities.disableDamage = false;
+        p.sendPlayerAbilities();
         p.inventory.clear();
         p.inventory.mainInventory.set(0,
             new net.minecraft.item.ItemStack(net.minecraft.init.Items.IRON_SWORD));
@@ -6550,6 +6565,9 @@ sb.append("}");
             je.addProperty("dz", en.posZ - p.posZ);
             je.addProperty("vx", en.motionX); je.addProperty("vy", en.motionY); je.addProperty("vz", en.motionZ);
             je.addProperty("yaw", en.rotationYaw); je.addProperty("pitch", en.rotationPitch);
+            je.addProperty("invisible", en.isInvisible());
+            je.addProperty("invisible_to_viewer", en.isInvisibleToPlayer(p));
+            je.addProperty("dead", en.isDead);
             if (en instanceof net.minecraft.entity.EntityLivingBase) {
                 net.minecraft.entity.EntityLivingBase lb = (net.minecraft.entity.EntityLivingBase) en;
                 je.addProperty("health", lb.getHealth());
