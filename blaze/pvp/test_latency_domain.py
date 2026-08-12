@@ -10,7 +10,7 @@ sys.path.insert(0, str(HERE))
 from pvp import CPU_SO, N_NETWORK_OBS, NetworkVecPvp
 from train_selfplay import (Policy, V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             action_observation_dim, checkpoint_action_schema,
-                            transfer_v2_latency_policy)
+                            scripted_action_indices, transfer_v2_latency_policy)
 sys.path.insert(0, str(HERE.parent.parent / "java"))
 from deploy_pvp_checkpoint import PolicyObservationHistory, SimulatedActionUplink
 
@@ -50,6 +50,26 @@ def test_masked_reset_only_resamples_selected_network_lanes():
     np.testing.assert_array_equal(env._base_ping[[0, 2, 3]], before[[0, 2, 3]])
     assert np.any(env._base_ping[1] != before[1])
     env.close()
+
+
+def test_asymmetric_curriculum_balances_disadvantaged_role_and_gap():
+    env = NetworkVecPvp(4096, so_path=CPU_SO,
+                        latency_profile="asymmetric_curriculum")
+    env.reset(np.arange(4096, dtype=np.uint64))
+    gap = env._base_ping[:, 0] - env._base_ping[:, 1]
+    assert (np.abs(gap) >= 60.0).mean() >= 0.55
+    assert 0.45 <= (gap > 0).mean() <= 0.55
+    env.close()
+
+
+def test_latency_teacher_leads_moving_target_instead_of_chasing_stale_bearing():
+    obs = torch.zeros((1, N_NETWORK_OBS))
+    obs[0, 6] = 3.0 / 32.0  # target ahead
+    obs[0, 8] = 0.5         # target moving laterally per tick
+    obs[0, -1] = 1.0        # own RTT = 200 ms, four-tick prediction horizon
+    latency = scripted_action_indices(obs, action_schema=V21_ACTION_SCHEMA)
+    no_latency = scripted_action_indices(obs[:, :35], action_schema=V2_ACTION_SCHEMA)
+    assert abs(float(latency[0, 2])) > abs(float(no_latency[0, 2])) + 1.0
 
 
 def test_latency_schema_expands_v2_without_changing_initial_behavior():

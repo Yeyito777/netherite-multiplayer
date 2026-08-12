@@ -290,10 +290,26 @@ def decode_actions(a, device, action_schema=LEGACY_ACTION_SCHEMA):
     return rows
 
 
-def _teacher_pitch_delta(obs):
+def _teacher_target(obs, action_schema):
+    """Delivered target displacement, extrapolated to expected apply time.
+
+    V2.1's last input is own RTT/200. A command based on a delivered observation
+    is approximately one downlink plus one uplink behind the state in which it is
+    applied, so extrapolate relative velocity by RTT/50 Minecraft ticks.
+    """
+    lateral, longitudinal = obs[:, 5], obs[:, 6]
+    if action_schema == V21_ACTION_SCHEMA:
+        lookahead_ticks = obs[:, -1].clamp(0.0, 1.05) * 4.0
+        lateral = lateral + obs[:, 8] * lookahead_ticks / 32.0
+        longitudinal = longitudinal + obs[:, 9] * lookahead_ticks / 32.0
+    return lateral, longitudinal
+
+
+def _teacher_pitch_delta(obs, action_schema=LEGACY_ACTION_SCHEMA):
     """Aim from own eye to the opponent AABB center, then close pitch error."""
-    horizontal = torch.sqrt((obs[:, 5] * 32.0).square()
-                            + (obs[:, 6] * 32.0).square()).clamp_min(1e-4)
+    lateral, longitudinal = _teacher_target(obs, action_schema)
+    horizontal = torch.sqrt((lateral * 32.0).square()
+                            + (longitudinal * 32.0).square()).clamp_min(1e-4)
     target_center_from_eye = obs[:, 7] * 8.0 + 0.9 - 1.62
     desired_pitch = torch.atan2(-target_center_from_eye, horizontal) * (180.0 / np.pi)
     current_pitch = obs[:, 24] * 90.0
@@ -302,8 +318,7 @@ def _teacher_pitch_delta(obs):
 
 def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA):
     """Categorical policy targets for the deterministic boxing teacher."""
-    lateral = obs[:, 5]
-    longitudinal = obs[:, 6]  # positive is in front
+    lateral, longitudinal = _teacher_target(obs, action_schema)
     dist = obs[:, 10] * 32.0
     bearing = torch.atan2(lateral.abs(), longitudinal)
     aligned_move = bearing < (30.0 * np.pi / 180.0)
@@ -329,7 +344,7 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
                               torch.full_like(desired, 20.0), desired)
         out[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT)
         if has_continuous_pitch(action_schema):
-            out[:, 3] = _teacher_pitch_delta(obs)
+            out[:, 3] = _teacher_pitch_delta(obs, action_schema)
     elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
@@ -366,8 +381,7 @@ def scripted_baseline(obs, device, attack=True,
     """Deterministic turn, approach, sprint, and optionally punch controller."""
     n = obs.shape[0]
     rows = torch.zeros((n, N_ACT), dtype=torch.float64, device=device)
-    lateral = obs[:, 5]
-    longitudinal = obs[:, 6]
+    lateral, longitudinal = _teacher_target(obs, action_schema)
     dist = obs[:, 10] * 32.0
     bearing = torch.atan2(lateral.abs(), longitudinal)
     aligned_move = bearing < (30.0 * np.pi / 180.0)
@@ -379,7 +393,7 @@ def scripted_baseline(obs, device, attack=True,
                               torch.full_like(desired, 20.0), desired)
         rows[:, 2] = desired.clamp(-YAW_LIMIT, YAW_LIMIT).to(torch.float64)
         if has_continuous_pitch(action_schema):
-            rows[:, 3] = _teacher_pitch_delta(obs).to(torch.float64)
+            rows[:, 3] = _teacher_pitch_delta(obs, action_schema).to(torch.float64)
     elif action_schema == FINE_ACTION_SCHEMA:
         desired = torch.atan2(-lateral, longitudinal) * (180.0 / np.pi)
         desired = torch.where((longitudinal < 0.0) & (lateral.abs() < 0.01),
@@ -712,6 +726,8 @@ def main():
         "approach_reward": float(os.environ.get("PVP_APPROACH_REWARD", "0.1")),
         "weapon_switch_cost": float(os.environ.get("PVP_SWITCH_COST", "0.02")),
         "shield_disable_bonus": float(os.environ.get("PVP_SHIELD_DISABLE_BONUS", "0.5")),
+        "yaw_variation_cost": float(os.environ.get("PVP_YAW_VARIATION_COST", "0.003")),
+        "yaw_saturation_cost": float(os.environ.get("PVP_YAW_SATURATION_COST", "0.002")),
         # Opt-in deployment-domain randomization, calibrated from the measured
         # real-client timing report rather than broad arbitrary perturbations.
         "action_hold_prob": float(os.environ.get("PVP_ACTION_HOLD_PROB", "0")),
@@ -724,6 +740,9 @@ def main():
              CONTINUOUS_LOOK_ACTION_SCHEMA, V2_ACTION_SCHEMA,
              V21_ACTION_SCHEMA) else "0")),
         "network_domain": action_schema == V21_ACTION_SCHEMA,
+        "latency_profile": os.environ.get(
+            "PVP_LATENCY_PROFILE", "asymmetric_curriculum"
+            if action_schema == V21_ACTION_SCHEMA else "uniform"),
         "ping_min_ms": float(os.environ.get("PVP_PING_MIN_MS", "20")),
         "ping_max_ms": float(os.environ.get("PVP_PING_MAX_MS", "200")),
         "ping_variation_fraction": 0.05 if action_schema == V21_ACTION_SCHEMA else 0.0,
@@ -787,7 +806,8 @@ def main():
                   for p in policies]
     env = (NetworkVecPvp(cfg["n"], device=device.index or 0,
                          min_ping_ms=cfg["ping_min_ms"],
-                         max_ping_ms=cfg["ping_max_ms"])
+                         max_ping_ms=cfg["ping_max_ms"],
+                         latency_profile=cfg["latency_profile"])
            if cfg["network_domain"] else
            VecPvp(cfg["n"], device=device.index or 0))
     seeds = np.arange(cfg["seed"], cfg["seed"] + cfg["n"], dtype=np.uint64)
@@ -863,6 +883,7 @@ def main():
             # that produced this action *before* env.step overwrites that buffer;
             # pairing actions/log-probs with the next state creates a fake PPO KL.
             decision_obs = obs.clone()
+            prior_rows = previous_rows
             executed_rows = rows
             if cfg["action_hold_prob"] > 0.0:
                 hold = (torch.rand((cfg["n"], 2), device=device) <
@@ -903,6 +924,11 @@ def main():
                 disabled_opponent = ((next_obs[:, :, 30] > 0.5) &
                                      (decision_obs[:, :, 30] <= 0.5))
                 train_reward += cfg["shield_disable_bonus"] * disabled_opponent.float()
+                if cfg["action_schema"] == V21_ACTION_SCHEMA:
+                    yaw_variation = (rows[:, :, 2] - prior_rows[:, :, 2]).abs() / YAW_LIMIT
+                    yaw_saturated = (rows[:, :, 2].abs() > 18.0).float()
+                    train_reward -= cfg["yaw_variation_cost"] * yaw_variation.float()
+                    train_reward -= cfg["yaw_saturation_cost"] * yaw_saturated
             if chunk < cfg["bootstrap_chaser"]:
                 # Potential-based approach shaping solves the exploration problem
                 # without paying the agent merely for standing near its target.

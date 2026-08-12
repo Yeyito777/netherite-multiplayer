@@ -125,11 +125,14 @@ class NetworkVecPvp:
     HISTORY = 8
 
     def __init__(self, n, device=0, so_path=None, min_ping_ms=20.0,
-                 max_ping_ms=200.0):
+                 max_ping_ms=200.0, latency_profile="uniform"):
         self.raw = VecPvp(n, device=device, so_path=so_path)
         self.n, self.device, self.backend = self.raw.n, self.raw.device, self.raw.backend
         self.xp = self.raw.xp
         self.min_ping_ms, self.max_ping_ms = float(min_ping_ms), float(max_ping_ms)
+        if latency_profile not in ("uniform", "asymmetric_curriculum"):
+            raise ValueError(f"unknown latency profile {latency_profile}")
+        self.latency_profile = latency_profile
         self.obs = None
         self._initialized = False
         self._cursor = 0
@@ -192,6 +195,44 @@ class NetworkVecPvp:
         return self._base_ping * (1.0 + 0.05 * xp.sin(
             self._phase + self._steps * self._rate))
 
+    def _sample_base_ping(self, seeds, u0, u1, u2):
+        """Sample either independent uniform RTT or a balanced matchup mixture.
+
+        The curriculum devotes 60% of lanes to a 60+ ms gap and explicitly
+        alternates which role is disadvantaged. Remaining lanes preserve low/low,
+        high/high, and unconstrained matchups so robustness is not overfit to one
+        artificial pairing.
+        """
+        import numpy as np
+        if self.latency_profile == "uniform":
+            return self.min_ping_ms + (self.max_ping_ms - self.min_ping_ms) * u0
+        seeds = np.asarray(seeds, dtype=np.uint64)
+        lane_u = u2[:, 0]
+        base = self.min_ping_ms + (self.max_ping_ms - self.min_ping_ms) * u0
+        asym = lane_u < 0.60
+        low_low = (lane_u >= 0.60) & (lane_u < 0.75)
+        high_high = (lane_u >= 0.75) & (lane_u < 0.90)
+        low = 20.0 + 40.0 * u0
+        high = 120.0 + 80.0 * u1
+        high_role = ((seeds >> np.uint64(7)) & np.uint64(1)).astype(np.int64)
+        for role in range(2):
+            base[asym, role] = np.where(
+                high_role[asym] == role, high[asym, role], low[asym, role])
+            base[low_low, role] = low[low_low, role]
+            base[high_high, role] = high[high_high, role]
+        return np.clip(base, self.min_ping_ms, self.max_ping_ms)
+
+    def set_base_ping_ms(self, values):
+        """Set fixed per-lane/role baselines for ordered matrix evaluation."""
+        value = self._as_backend(values, self._base_ping.dtype)
+        if tuple(value.shape) == (2,):
+            self._base_ping[...] = value[None, :]
+        elif tuple(value.shape) == (self.n, 2):
+            self._base_ping[...] = value
+        else:
+            raise ValueError("ping values must have shape (2,) or (n,2)")
+        self._publish_observation(self._delays(self.current_ping_ms(), 2.7))
+
     def _delays(self, ping, phase_offset):
         """One-way milliseconds plus a changing packet/tick boundary phase."""
         xp = self.xp
@@ -227,7 +268,7 @@ class NetworkVecPvp:
             self._initialize()
         selected = np.ones(self.n, dtype=bool) if mask is None else np.asarray(mask).astype(bool)
         u0, u1, u2 = self._seed_parameters(np.asarray(seeds, dtype=np.uint64))
-        base = self.min_ping_ms + (self.max_ping_ms - self.min_ping_ms) * u0
+        base = self._sample_base_ping(np.asarray(seeds, dtype=np.uint64), u0, u1, u2)
         phase = 2.0 * np.pi * u1
         # Periods of roughly 2.5--10 seconds at 20 Hz: unstable but correlated ping.
         rate = 2.0 * np.pi / (50.0 + 150.0 * u2)

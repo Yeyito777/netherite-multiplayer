@@ -21,7 +21,8 @@ from train_selfplay import (CONTINUOUS_ACTION_SCHEMA, CONTINUOUS_LOOK_ACTION_SCH
 @torch.no_grad()
 def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         swap_policies=False, deterministic_yaw=False, action_hold_prob=0.0,
-        extra_repeat_prob=0.0, ping_min_ms=20.0, ping_max_ms=200.0):
+        extra_repeat_prob=0.0, ping_min_ms=20.0, ping_max_ms=200.0,
+        fixed_ping_ms=None):
     torch.manual_seed(seed)
     device = torch.device("cpu")
     policies = [Policy(action_schema=action_schema).eval(),
@@ -34,6 +35,11 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
            if action_schema == V21_ACTION_SCHEMA else VecPvp(episodes))
     seeds = np.arange(seed, seed + episodes, dtype=np.uint64)
     obs = env_tensor(env.reset(seeds), device)
+    if fixed_ping_ms is not None:
+        if action_schema != V21_ACTION_SCHEMA:
+            raise ValueError("fixed ping evaluation requires V2.1")
+        env.set_base_ping_ms(np.asarray(fixed_ping_ms, dtype=np.float32))
+        obs = env_tensor(env.obs, device)
     active = torch.ones(episodes, dtype=torch.bool)
     wins = [0, 0]
     draws = 0
@@ -183,6 +189,7 @@ def run(checkpoint, episodes, horizon, repeat, stochastic, seed, action_schema,
         "extra_repeat_prob": extra_repeat_prob,
         "ping_min_ms": ping_min_ms if action_schema == V21_ACTION_SCHEMA else None,
         "ping_max_ms": ping_max_ms if action_schema == V21_ACTION_SCHEMA else None,
+        "fixed_ping_ms": fixed_ping_ms,
         "episodes": episodes, "horizon_decisions": horizon, "repeat": repeat,
         "wins_role0": wins[0], "wins_role1": wins[1], "draws": draws,
         "horizon_draws": horizon_draws,
@@ -244,6 +251,8 @@ def main():
                     help="probability a decision spans one additional env tick")
     ap.add_argument("--ping-min-ms", type=float, default=20.0)
     ap.add_argument("--ping-max-ms", type=float, default=200.0)
+    ap.add_argument("--fixed-ping-ms",
+                    help="two comma-separated per-role baseline RTTs")
     args = ap.parse_args()
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = ck.get("config", {})
@@ -252,7 +261,8 @@ def main():
     domain = {"action_hold_prob": args.action_hold_prob,
               "extra_repeat_prob": args.extra_repeat_prob,
               "ping_min_ms": args.ping_min_ms,
-              "ping_max_ms": args.ping_max_ms}
+              "ping_max_ms": args.ping_max_ms,
+              "fixed_ping_ms": fixed_ping}
     result = {
         "checkpoint": str(args.checkpoint),
         "action_schema": action_schema, "repeat": repeat,
@@ -285,3 +295,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    fixed_ping = ([float(x) for x in args.fixed_ping_ms.split(",")]
+                  if args.fixed_ping_ms else None)
+    if fixed_ping is not None and len(fixed_ping) != 2:
+        ap.error("--fixed-ping-ms requires two values")
