@@ -322,7 +322,9 @@ def scripted_action_indices(obs, attack=True, action_schema=LEGACY_ACTION_SCHEMA
     if action_schema == V2_ACTION_SCHEMA:
         opponent_blocking = obs[:, 28] > 0.5
         shield_available = obs[:, 29] <= 0.0
-        threatened = (dist < 3.2) & aligned_attack
+        # Keep use held through post-hit knockback; a shield needs five
+        # consecutive use ticks before vanilla considers it blocking.
+        threatened = (dist < 5.0) & aligned_attack
         out[:, 7] = opponent_blocking.long()  # axe into shield, sword otherwise
         out[:, 6] = torch.where(
             ready_attack & attack, torch.ones_like(out[:, 6]),
@@ -368,7 +370,9 @@ def scripted_baseline(obs, device, attack=True,
         opponent_blocking = obs[:, 28] > 0.5
         shield_available = obs[:, 29] <= 0.0
         ready = (dist < 3.0) & aligned_attack & (obs[:, 15] > 0.9)
-        threatened = (dist < 3.2) & aligned_attack
+        # Keep use held through post-hit knockback; a shield needs five
+        # consecutive use ticks before vanilla considers it blocking.
+        threatened = (dist < 5.0) & aligned_attack
         rows[:, 7] = opponent_blocking.to(torch.float64)
         rows[:, 6] = (ready & attack).to(torch.float64)
         rows[:, 8] = ((~ready | (not attack)) & threatened &
@@ -428,6 +432,16 @@ def behavior_clone(policy, env, obs, seeds, device, steps, epochs, minibatch,
                     torch.randint(0, len(yaw_values), (env.n, 2), device=device)]
             random_rows[:, :, 5] = (random_rows[:, :, 0] > 0).to(torch.float64)
             rows = torch.where(perturb[:, :, None], random_rows, rows)
+        if action_schema == V2_ACTION_SCHEMA:
+            # Symmetric teachers lower both shields to swing on the same tick,
+            # producing no axe-vs-shield examples. Alternate a persistent blocker
+            # role in 16-tick windows so both egocentric roles observe raised
+            # shields, disable them with axes, then learn the sword follow-up.
+            forced_role = (step // 16) % 3 - 1
+            if forced_role >= 0:
+                rows[:, forced_role, 6] = 0.0
+                rows[:, forced_role, 7] = 0.0
+                rows[:, forced_role, 8] = 1.0
         examples.append(obs[..., :policy.obs_dim].reshape(-1, policy.obs_dim).clone())
         targets.append(torch.stack(labels, dim=1).reshape(-1, N_ACT))
         next_obs, _, done, _, _ = env.step(rows, repeat=repeat)
