@@ -151,13 +151,37 @@ def observation(players, role, legacy=False):
 
 
 class PolicyObservationHistory:
-    """Four delivered frames plus the acting client's own current RTT."""
-    def __init__(self, players, rows):
+    """Four delivered frames plus the acting client's own current RTT.
+
+    With simulated RTT, raw client frames enter a downlink queue. Without it,
+    Minecraft/network delivery has already delayed the client-visible state.
+    """
+    def __init__(self, players, rows, simulated_ping_ms=None):
         self.frames = []
+        self.raw_frames = []
         for role in range(2):
             first = observation(players, role)
             self.frames.append([first.copy() for _ in range(4)])
-        self.ping_ms = [float(row.get("ping_ms", 0.0)) for row in rows]
+            self.raw_frames.append([first.copy() for _ in range(8)])
+        self.base_ping_ms = simulated_ping_ms
+        self.ping_ms = ([float(x) for x in simulated_ping_ms]
+                        if simulated_ping_ms is not None else
+                        [float(row.get("ping_ms", 0.0)) for row in rows])
+        self.step = 0
+
+    def current_ping(self, role):
+        if self.base_ping_ms is None:
+            return self.ping_ms[role]
+        # Independent smooth instability, bounded to exactly +/-5%.
+        phase = (0.7 + role * 2.1) + self.step * (0.071 + role * 0.019)
+        return self.base_ping_ms[role] * (1.0 + 0.05 * math.sin(phase))
+
+    def one_way_delay_ticks(self, role, phase_offset):
+        ping = self.current_ping(role)
+        phase = 0.5 + 0.5 * math.sin(
+            (0.7 + role * 2.1) * 1.731
+            + self.step * (0.071 + role * 0.019) * 2.173 + phase_offset)
+        return int(math.floor(ping / 100.0 + phase))
 
     def encode(self, role):
         return np.concatenate(self.frames[role] + [
@@ -166,8 +190,35 @@ class PolicyObservationHistory:
     def update(self, players, rows):
         for role in range(2):
             current = observation(players, role)
-            self.frames[role] = [current] + self.frames[role][:3]
-            self.ping_ms[role] = float(rows[role].get("ping_ms", self.ping_ms[role]))
+            self.raw_frames[role] = [current] + self.raw_frames[role][:7]
+            delay = (self.one_way_delay_ticks(role, 2.7)
+                     if self.base_ping_ms is not None else 0)
+            delivered = self.raw_frames[role][min(delay, 7)]
+            self.frames[role] = [delivered] + self.frames[role][:3]
+            self.ping_ms[role] = (self.current_ping(role)
+                                  if self.base_ping_ms is not None else
+                                  float(rows[role].get("ping_ms", self.ping_ms[role])))
+        self.step += 1
+
+
+class SimulatedActionUplink:
+    """FIFO per-player action queue with independently varying one-way delay."""
+    def __init__(self, history):
+        self.history = history
+        self.queue = [[], []]
+        self.applied = [[0.0] * 9, [0.0] * 9]
+        self.last_due = [0, 0]
+
+    def submit(self, actions):
+        now = self.history.step
+        for role in range(2):
+            due = now + self.history.one_way_delay_ticks(role, 0.3)
+            due = max(due, self.last_due[role])  # TCP/FIFO: no overtaking.
+            self.last_due[role] = due
+            self.queue[role].append((due, actions[role]))
+            while self.queue[role] and self.queue[role][0][0] <= now:
+                _, self.applied[role] = self.queue[role].pop(0)
+        return [list(row) for row in self.applied]
 
 
 @torch.no_grad()
@@ -377,7 +428,19 @@ def main():
                         default=ROOT / "artifacts/java_pvp_deployment.jsonl")
     parser.add_argument("--timing-summary", type=Path,
                         help="defaults beside --out with suffix .timing.json")
+    parser.add_argument("--simulated-ping-ms",
+                        help="two comma-separated per-player baseline RTTs; applies "
+                             "independent action/observation delay and +/-5%% variation")
     args = parser.parse_args()
+    simulated_ping = None
+    if args.simulated_ping_ms:
+        simulated_ping = [float(x) for x in args.simulated_ping_ms.split(",")]
+        if len(simulated_ping) != 2 or any(x < 0 or x > 200 for x in simulated_ping):
+            parser.error("--simulated-ping-ms requires two values in [0,200]")
+        if checkpoint_action_schema(torch.load(
+                args.checkpoint, map_location="cpu", weights_only=False).get("config", {})) \
+                != V21_ACTION_SCHEMA:
+            parser.error("simulated ping requires a latency-aware V2.1 checkpoint")
     if (args.ready_file is None) != (args.start_file is None):
         parser.error("--ready-file and --start-file must be used together")
 
@@ -445,11 +508,15 @@ def main():
         started = time.time()
         client_players = None
         policy_history = None
+        simulated_uplink = None
         persistent = None
         if args.realtime_client_path:
             client_players = [decode_client_player(row) for row in visible_rows]
             if action_schema == V21_ACTION_SCHEMA:
-                policy_history = PolicyObservationHistory(client_players, visible_rows)
+                policy_history = PolicyObservationHistory(
+                    client_players, visible_rows, simulated_ping_ms=simulated_ping)
+                if simulated_ping is not None:
+                    simulated_uplink = SimulatedActionUplink(policy_history)
             persistent = [PersistentBridge(25575 + role) for role in range(2)]
         try:
           for decision in range(args.decisions):
@@ -464,9 +531,11 @@ def main():
                            args.sample_continuous_yaw,
                            args.sample_continuous_pitch)
                        for r in range(2)]
+                executed_raw = (simulated_uplink.submit(raw)
+                                if simulated_uplink is not None else raw)
                 futures = [pool.submit(persistent[r].call,
                                        {"cmd": "step", "action":
-                                        client_action(raw[r], client_attack=True)})
+                                        client_action(executed_raw[r], client_attack=True)})
                            for r in range(2)]
                 results = [f.result() for f in futures]
                 next_players = [decode_client_player(result[0]) for result in results]
@@ -499,6 +568,9 @@ def main():
                     "decision": decision,
                     "health": [p["health"] for p in next_players],
                     "actions": raw, "terminal": killed_role is not None,
+                    "executed_actions": executed_raw,
+                    "policy_ping_ms": ([policy_history.ping_ms[r] for r in range(2)]
+                                       if policy_history is not None else None),
                     "killed_role": killed_role,
                     "policy_action_seq": [p["policy_action_seq"] for p in next_players],
                     "timing": timing_row,

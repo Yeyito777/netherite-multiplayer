@@ -1,0 +1,31 @@
+{
+  "checkpoint": "artifacts/pilots/pilot23/selfplay.pt",
+  "control_hz_target": 20,
+  "measured_decisions_per_second": 19.81055722023502,
+  "decisions": 173,
+  "wall_seconds": 8.732717514038086,
+  "winner": 0,
+  "simulated_network": {
+    "model": "independent FIFO action uplink plus delayed observation downlink",
+    "variation_fraction": 0.05,
+    "player0": {
+      "baseline_rtt_ms": 35,
+      "observed_min_rtt_ms": 33.250000288580424,
+      "observed_max_rtt_ms": 36.74974658443197,
+      "mean_action_age_ticks": 0.43023255813953487,
+      "max_action_age_ticks": 1
+    },
+    "player1": {
+      "baseline_rtt_ms": 140,
+      "observed_min_rtt_ms": 133.00010875410487,
+      "observed_max_rtt_ms": 146.9999719082403,
+      "mean_action_age_ticks": 1.430232558139535,
+      "max_action_age_ticks": 2
+    }
+  },
+  "policy_input_privacy": "each policy receives only its own RTT",
+  "videos": {
+    "player0": "https://storage.googleapis.com/unified-adviser-462618-s0-netherite-fights/pilot23/pilot23-latency-35ms-player0-pov.mp4",
+    "player1": "https://storage.googleapis.com/unified-adviser-462618-s0-netherite-fights/pilot23/pilot23-latency-140ms-player1-pov.mp4"
+  }
+}

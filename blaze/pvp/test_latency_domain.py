@@ -12,7 +12,7 @@ from train_selfplay import (Policy, V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             action_observation_dim, checkpoint_action_schema,
                             transfer_v2_latency_policy)
 sys.path.insert(0, str(HERE.parent.parent / "java"))
-from deploy_pvp_checkpoint import PolicyObservationHistory
+from deploy_pvp_checkpoint import PolicyObservationHistory, SimulatedActionUplink
 
 
 def _player(x):
@@ -82,3 +82,23 @@ def test_deployment_history_feeds_only_each_clients_own_ping():
                    [{"ping_ms": 30}, {"ping_ms": 160}])
     assert history.encode(0)[-1] == 30 / 200
     assert history.encode(1)[-1] == 160 / 200
+
+
+def test_deployment_simulated_ping_varies_bounded_and_delays_fifo_actions():
+    players = [_player(-4.0), _player(4.0)]
+    history = PolicyObservationHistory(players, [{}, {}], [30.0, 160.0])
+    uplink = SimulatedActionUplink(history)
+    seen = [[], []]
+    for step in range(200):
+        selected = [[float(step)] + [0.0] * 8,
+                    [float(step)] + [0.0] * 8]
+        applied = uplink.submit(selected)
+        for role in range(2):
+            seen[role].append(applied[role][0])
+            ping = history.current_ping(role)
+            assert history.base_ping_ms[role] * .95 <= ping <= history.base_ping_ms[role] * 1.05
+        history.update(players, [{}, {}])
+    # High-ping player sees a longer lag and applied packet sequence never rewinds.
+    assert seen[1][20] < seen[0][20]
+    assert all(b >= a for role in seen for a, b in zip(role, role[1:]))
+    assert history.encode(0)[-1] != history.encode(1)[-1]
