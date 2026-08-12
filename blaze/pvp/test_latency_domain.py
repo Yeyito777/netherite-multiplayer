@@ -7,7 +7,7 @@ import torch
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from pvp import N_NETWORK_OBS, NetworkVecPvp
+from pvp import CPU_SO, N_NETWORK_OBS, NetworkVecPvp
 from train_selfplay import (Policy, V2_ACTION_SCHEMA, V21_ACTION_SCHEMA,
                             action_observation_dim, checkpoint_action_schema,
                             transfer_v2_latency_policy)
@@ -23,7 +23,7 @@ def _player(x):
 
 
 def test_ping_is_independent_per_player_private_and_bounded():
-    env = NetworkVecPvp(32, min_ping_ms=20.0, max_ping_ms=200.0)
+    env = NetworkVecPvp(32, so_path=CPU_SO, min_ping_ms=20.0, max_ping_ms=200.0)
     obs = env.reset(np.arange(32, dtype=np.uint64))
     assert obs.shape == (32, 2, N_NETWORK_OBS)
     assert np.any(env._base_ping[:, 0] != env._base_ping[:, 1])
@@ -41,7 +41,7 @@ def test_ping_is_independent_per_player_private_and_bounded():
 
 
 def test_masked_reset_only_resamples_selected_network_lanes():
-    env = NetworkVecPvp(4)
+    env = NetworkVecPvp(4, so_path=CPU_SO)
     seeds = np.arange(4, dtype=np.uint64)
     env.reset(seeds)
     before = env._base_ping.copy()
